@@ -1,0 +1,35 @@
+name: POP3-Forwarder_DHI
+on:
+  schedule:
+    - cron: '*/6 * * * *'  # alle 10 Minuten b
+  workflow_dispatch:
+jobs:
+  forward:
+    runs-on: ubuntu-latest
+
+    # Secrets werden als Environment Variables gesetzt
+    env:
+      POP3_HOST: ${{ secrets.POP3_HOST }}
+      POP3_USER_DHI: ${{ secrets.POP3_USER_DHI }}
+      POP3_PASS_DHI: ${{ secrets.POP3_PASS_DHI }}
+      SMTP_HOST: ${{ secrets.SMTP_HOST }}
+      SMTP_PORT: ${{ secrets.SMTP_PORT }}
+      SMTP_USER_DHI: ${{ secrets.SMTP_USER_DHI }}
+      SMTP_PASS_DHI: ${{ secrets.SMTP_PASS_DHI }}
+      SMTP_FROM_DHI: ${{ secrets.SMTP_FROM_DHI }}       # hier wird das Secret genutzt
+      TARGET_EMAIL_DHI: ${{ secrets.TARGET_EMAIL_DHI }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.14'
+
+      - name: Install dependencies
+        run: pip install --upgrade pip
+
+      - name: Run POP3 Forwarder
+        run: python forwarder.py
