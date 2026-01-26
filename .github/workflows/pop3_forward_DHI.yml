@@ -32,4 +32,4 @@ jobs:
         run: pip install --upgrade pip
 
       - name: Run POP3 Forwarder
-        run: python forwarder.py
+        run: python forwarder_DHI.py
