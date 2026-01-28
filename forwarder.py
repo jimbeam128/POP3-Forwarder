@@ -103,10 +103,10 @@ for i in sorted(uidls.keys()):
         msg_content = b"\r\n".join(lines)
         email_msg = message_from_bytes(msg_content)
 
-        original_from = email_msg.get('From', 'unknown@example.com')
+        original_from = clean_header(email_msg.get('From', 'unknown@example.com'))
         original_subject = clean_header(email_msg.get('Subject'))
 
-        sender = str(make_header(decode_header(original_from)))
+        sender = clean_header(str(make_header(decode_header(original_from))))
         sender_name = sender.split("<")[0].strip() if "<" in sender else sender
 
         forward = EmailMessage()
