@@ -101,17 +101,19 @@ for i in sorted(uidls.keys()):
     try:
         resp, lines, octets = pop_conn.retr(i)
         msg_content = b"\r\n".join(lines)
-        email_msg = message_from_bytes(msg_content)
+        from email import policy
+        from email.parser import BytesParser
+        email_msg = BytesParser(policy=policy.default).parsebytes(msg_content)
 
         original_from = clean_header(email_msg.get('From', 'unknown@example.com'))
         raw_subject = email_msg.get('Subject')
-        original_subject = clean_header(raw_subject)
+        original_subject = str(email_msg['Subject']) if email_msg['Subject'] else "(no subject)"
 
         from email.utils import parseaddr
 
-        name, addr = parseaddr(email_msg.get('From', ''))
-        sender_name = clean_header(name) if name else "Unknown Sender"
-        original_from = addr if addr else "unknown@example.com"
+        name, addr = parseaddr(str(email_msg['From']))
+        sender_name = name or "Unknown Sender"
+        original_from = addr or "unknown@example.com"
 
         forward = EmailMessage()
         forward['Subject'] = original_subject
