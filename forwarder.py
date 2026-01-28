@@ -113,9 +113,24 @@ for i in sorted(uidls.keys()):
 
         # Original-Absender und Betreff dekodieren + header-safe
         from email.utils import parseaddr
-        name, addr = parseaddr(str(email_msg['From']))
-        sender_name = header_safe(name) or "Unknown Sender"
-        original_from = addr or "unknown@example.com"
+        from_name, from_addr = parseaddr(str(email_msg.get('From', '')))
+        reply_name, reply_addr = parseaddr(str(email_msg.get('Reply-To', '')))
+
+        # Determine display name
+        if from_name:
+            sender_name = header_safe(from_name)
+        elif reply_name:
+            sender_name = header_safe(reply_name)
+        elif reply_addr and "@" in reply_addr:
+            sender_name = reply_addr.split("@")[0]
+        elif from_addr and "@" in from_addr:
+            sender_name = from_addr.split("@")[0]
+        else:
+            sender_name = "Mail Sender"
+
+        # Preserve real reply target
+        original_from = reply_addr or from_addr or "unknown@example.com"
+       
         original_subject = decode_and_safe(email_msg['Subject'])
 
         forward = EmailMessage()
