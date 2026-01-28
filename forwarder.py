@@ -134,6 +134,7 @@ for i in sorted(uidls.keys()):
                 elif 'attachment' in cdisp:
                     filename = part.get_filename()
                     if filename:
+                        filename = clean_header(filename)
                         forward.add_attachment(
                             payload,
                             maintype=part.get_content_maintype(),
