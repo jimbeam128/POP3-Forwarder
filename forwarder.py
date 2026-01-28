@@ -6,6 +6,12 @@ from email import message_from_bytes
 from email.message import EmailMessage
 from email.header import decode_header, make_header
 
+def header_safe(value):
+    if not value:
+        return ""
+    # zerlegt ALLE Whitespace-Arten (inkl. RFC folding & Unicode)
+    return " ".join(str(value).split())
+
 # ======================
 # Helper
 # ======================
@@ -107,20 +113,20 @@ for i in sorted(uidls.keys()):
 
         original_from = clean_header(email_msg.get('From', 'unknown@example.com'))
         raw_subject = email_msg.get('Subject')
-        original_subject = str(email_msg['Subject']) if email_msg['Subject'] else "(no subject)"
+        original_subject = header_safe(email_msg['Subject']) if email_msg['Subject'] else "(no subject)"
 
         from email.utils import parseaddr
 
         name, addr = parseaddr(str(email_msg['From']))
-        sender_name = name or "Unknown Sender"
+        sender_name = header_safe(name) or "Unknown Sender"
         original_from = addr or "unknown@example.com"
 
         forward = EmailMessage()
         forward['Subject'] = original_subject
-        forward['From'] = f"{sender_name} <{SMTP_FROM}>"
+        forward['From'] = f"{sender_name} <{header_safe(SMTP_FROM)}>"
         forward['To'] = TARGET_EMAIL
-        forward['Reply-To'] = original_from
-        forward['X-Original-From'] = original_from
+        forward['Reply-To'] = header_safe(original_from)
+        forward['X-Original-From'] = header_safe(original_from)
         forward['X-Forwarded-By'] = SMTP_FROM_NAME
 
         if email_msg.is_multipart():
