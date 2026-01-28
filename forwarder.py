@@ -6,22 +6,22 @@ from email import message_from_bytes
 from email.message import EmailMessage
 from email.header import decode_header, make_header
 
+# ======================
+# Helper
+# ======================
 def header_safe(value):
     if not value:
         return ""
     # zerlegt ALLE Whitespace-Arten (inkl. RFC folding & Unicode)
     return " ".join(str(value).split())
 
-# ======================
-# Helper
-# ======================
-def clean_header(value):
-    if not value:
+def decode_and_safe(header_value):
+    if not header_value:
         return "(no subject)"
     try:
-        return str(make_header(decode_header(value))).replace('\r', '').replace('\n', '')
+        return header_safe(str(make_header(decode_header(header_value))))
     except Exception:
-        return "(invalid subject)"
+        return "(invalid header)"
 
 # ======================
 # POP3 Konfiguration
@@ -111,15 +111,12 @@ for i in sorted(uidls.keys()):
         from email.parser import BytesParser
         email_msg = BytesParser(policy=policy.default).parsebytes(msg_content)
 
-        original_from = clean_header(email_msg.get('From', 'unknown@example.com'))
-        raw_subject = email_msg.get('Subject')
-        original_subject = header_safe(email_msg['Subject']) if email_msg['Subject'] else "(no subject)"
-
+        # Original-Absender und Betreff dekodieren + header-safe
         from email.utils import parseaddr
-
         name, addr = parseaddr(str(email_msg['From']))
         sender_name = header_safe(name) or "Unknown Sender"
         original_from = addr or "unknown@example.com"
+        original_subject = decode_and_safe(email_msg['Subject'])
 
         forward = EmailMessage()
         forward['Subject'] = original_subject
@@ -146,7 +143,7 @@ for i in sorted(uidls.keys()):
                 elif 'attachment' in cdisp:
                     filename = part.get_filename()
                     if filename:
-                        filename = clean_header(filename)
+                        filename = decode_and_safe(filename)
                         forward.add_attachment(
                             payload,
                             maintype=part.get_content_maintype(),
