@@ -104,10 +104,14 @@ for i in sorted(uidls.keys()):
         email_msg = message_from_bytes(msg_content)
 
         original_from = clean_header(email_msg.get('From', 'unknown@example.com'))
-        original_subject = clean_header(email_msg.get('Subject'))
+        raw_subject = email_msg.get('Subject')
+        original_subject = clean_header(raw_subject)
 
-        sender = clean_header(str(make_header(decode_header(original_from))))
-        sender_name = sender.split("<")[0].strip() if "<" in sender else sender
+        from email.utils import parseaddr
+
+        name, addr = parseaddr(email_msg.get('From', ''))
+        sender_name = clean_header(name) if name else "Unknown Sender"
+        original_from = addr if addr else "unknown@example.com"
 
         forward = EmailMessage()
         forward['Subject'] = original_subject
