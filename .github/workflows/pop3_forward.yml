@@ -1,8 +1,7 @@
 name: POP3-Forwarder
-run-name: POP3-Forwarder
 on:
   schedule:
-    - cron: '*/6 * * * *'  # alle 10 Minuten b
+    - cron: '*/10 * * * *'  
   workflow_dispatch:
 jobs:
   forward:
@@ -44,9 +43,7 @@ jobs:
             COUNT=$(cat consecutive_failures.txt)
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "**Consecutive failures:** $COUNT" >> $GITHUB_STEP_SUMMARY
-            echo "GITHUB_RUN_NAME=POP3-Forwarder – failures: $COUNT" >> $GITHUB_ENV
           else
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "**Consecutive failures:** 0 (last run successful)" >> $GITHUB_STEP_SUMMARY
-           echo "GITHUB_RUN_NAME=POP3-Forwarder – failures: 0" >> $GITHUB_ENV
           fi
