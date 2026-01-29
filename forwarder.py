@@ -24,6 +24,24 @@ def decode_and_safe(header_value):
         return "(invalid header)"
 
 # ======================
+# Failure-Tracking
+# ======================
+FAILURE_FILE = "consecutive_failures.txt"    
+MAX_FAILURES = 3                             
+
+def read_failures():                         
+    if not os.path.exists(FAILURE_FILE):
+        return 0
+    with open(FAILURE_FILE, "r") as f:
+        return int(f.read().strip() or 0)
+
+def write_failures(n):                       
+    with open(FAILURE_FILE, "w") as f:
+        f.write(str(n))
+
+had_fatal_error = False                      
+
+# ======================
 # POP3 Konfiguration
 # ======================
 POP3_HOST = os.environ['POP3_HOST']
@@ -73,6 +91,7 @@ for attempt in range(POP3_RETRIES):
         time.sleep(5)
 
 if not pop_conn:
+    had_fatal_error = True
     raise RuntimeError("POP3 Verbindung nach mehreren Versuchen fehlgeschlagen")
 
 # ======================
@@ -192,4 +211,18 @@ for i in sorted(uidls.keys()):
 # ======================
 pop_conn.quit()
 smtp.quit()
+
+# ======================
+# Finaler Status
+# ======================
+if not had_fatal_error:                       
+    write_failures(0)                          
+    print("Status: Erfolg")                    
+else:                                          
+    failures = read_failures() + 1             
+    write_failures(failures)                   
+    print(f"[WARN] Fehlgeschlagene Läufe in Folge: {failures}") 
+    if failures >= MAX_FAILURES:              
+        raise RuntimeError("Maximale Anzahl aufeinanderfolgender Fehler erreicht") 
+
 print("Alle Mails verarbeitet.")
