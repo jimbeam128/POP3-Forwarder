@@ -1,7 +1,5 @@
 name: POP3-Forwarder_DHI
 on:
-  schedule:
-    - cron: '*/6 * * * *'  # alle 10 Minuten b
   workflow_dispatch:
 jobs:
   forward:
