@@ -33,3 +33,17 @@ jobs:
 
       - name: Run POP3 Forwarder
         run: python forwarder_DHI.py
+
+      - name: Show failure counter in summary
+        if: always()
+        run: |
+          echo "## 📊 POP3 Forwarder Status" >> $GITHUB_STEP_SUMMARY
+
+          if [ -f consecutive_failures.txt ]; then
+            COUNT=$(cat consecutive_failures.txt)
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Consecutive failures:** $COUNT" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Consecutive failures:** 0 (last run successful)" >> $GITHUB_STEP_SUMMARY
+          fi
