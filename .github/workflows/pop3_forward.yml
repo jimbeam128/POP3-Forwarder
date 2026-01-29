@@ -43,7 +43,9 @@ jobs:
             COUNT=$(cat consecutive_failures.txt)
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "**Consecutive failures:** $COUNT" >> $GITHUB_STEP_SUMMARY
+            echo "POP3 Forwarder – failures: $COUNT" >> $GITHUB_RUN_NAME
           else
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "**Consecutive failures:** 0 (last run successful)" >> $GITHUB_STEP_SUMMARY
+            echo "POP3 Forwarder – failures: 0" >> $GITHUB_RUN_NAME
           fi
