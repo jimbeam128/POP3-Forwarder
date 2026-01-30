@@ -76,141 +76,146 @@ if os.path.exists(UIDL_FILE):
     with open(UIDL_FILE, "r") as f:
         processed_uidls = set(line.strip() for line in f if line.strip())
 
-# ======================
-# Verbindung zu POP3 (mit Retry)
-# ======================
-pop_conn = None
-for attempt in range(POP3_RETRIES):
-    try:
-        pop_conn = poplib.POP3_SSL(POP3_HOST, timeout=POP3_TIMEOUT)
-        pop_conn.user(POP3_USER)
-        pop_conn.pass_(POP3_PASS)
-        break
-    except Exception as e:
-        print(f"[WARN] POP3 Verbindung fehlgeschlagen (Versuch {attempt + 1}): {e}")
-        time.sleep(5)
-
-if not pop_conn:
-    had_fatal_error = True
-    raise RuntimeError("POP3 Verbindung nach mehreren Versuchen fehlgeschlagen")
-
-# ======================
-# UIDLs abrufen
-# ======================
-resp, uidl_list, _ = pop_conn.uidl()
-uidls = {}
-for entry in uidl_list:
-    num, uid = entry.decode().split()
-    uidls[int(num)] = uid
-
-num_messages = len(uidls)
-print(f"{num_messages} Mails im Quellpostfach gefunden.")
-
-# ======================
-# SMTP Verbindung
-# ======================
-smtp = smtplib.SMTP(SMTP_HOST, SMTP_PORT)
-smtp.starttls()
-smtp.login(SMTP_USER, SMTP_PASS)
-
-# ======================
-# Weiterleitung
-# ======================
-for i in sorted(uidls.keys()):
-    uid = uidls[i]
-
-    if uid in processed_uidls:
-        print(f"[SKIP] Mail {i} (UIDL bereits verarbeitet)")
-        continue
-
-    try:
-        resp, lines, octets = pop_conn.retr(i)
-        msg_content = b"\r\n".join(lines)
-        from email import policy
-        from email.parser import BytesParser
-        email_msg = BytesParser(policy=policy.default).parsebytes(msg_content)
-
-        # Original-Absender und Betreff dekodieren + header-safe
-        from email.utils import parseaddr
-        from_name, from_addr = parseaddr(str(email_msg.get('From', '')))
-        reply_name, reply_addr = parseaddr(str(email_msg.get('Reply-To', '')))
-
-        # Determine display name
-        if from_name:
-            sender_name = header_safe(from_name)
-        elif reply_name:
-            sender_name = header_safe(reply_name)
-        elif reply_addr and "@" in reply_addr:
-            sender_name = reply_addr.split("@")[0]
-        elif from_addr and "@" in from_addr:
-            sender_name = from_addr.split("@")[0]
-        else:
-            sender_name = "Mail Sender"
-
-        # Preserve real reply target
-        original_from = reply_addr or from_addr or "unknown@example.com"
-       
-        original_subject = decode_and_safe(email_msg['Subject'])
-
-        forward = EmailMessage()
-        forward['Subject'] = original_subject
-        forward['From'] = f"{sender_name} <{header_safe(SMTP_FROM)}>"
-        forward['To'] = TARGET_EMAIL
-        forward['Reply-To'] = header_safe(original_from)
-        forward['X-Original-From'] = header_safe(original_from)
-        forward['X-Forwarded-By'] = SMTP_FROM_NAME
-
-        if email_msg.is_multipart():
-            for part in email_msg.walk():
-                ctype = part.get_content_type()
-                cdisp = str(part.get('Content-Disposition'))
-                payload = part.get_payload(decode=True)
-                charset = part.get_content_charset() or 'utf-8'
-
-                if payload is None:
-                    continue
-
-                if ctype == 'text/plain' and 'attachment' not in cdisp:
-                    forward.set_content(payload.decode(charset, errors='replace'))
-                elif ctype == 'text/html' and 'attachment' not in cdisp:
-                    forward.add_alternative(payload.decode(charset, errors='replace'), subtype='html')
-                elif 'attachment' in cdisp:
-                    filename = part.get_filename()
-                    if filename:
-                        filename = decode_and_safe(filename)
-                        forward.add_attachment(
-                            payload,
-                            maintype=part.get_content_maintype(),
-                            subtype=part.get_content_subtype(),
-                            filename=filename
-                        )
-        else:
-            payload = email_msg.get_payload(decode=True)
-            charset = email_msg.get_content_charset() or 'utf-8'
-            if payload:
-                forward.set_content(payload.decode(charset, errors='replace'))
-
-        smtp.send_message(forward)
-        pop_conn.dele(i)
-
-        processed_uidls.add(uid)
-        with open(UIDL_FILE, "a") as f:
-            f.write(uid + "\n")
-
-        print(f"[OK] Mail {i} weitergeleitet.")
-
-    except Exception as e:
-        print(f"[FEHLER] Mail {i}: {e}")
+try:
+    # ======================
+    # Verbindung zu POP3 (mit Retry)
+    # ======================
+    pop_conn = None
+    for attempt in range(POP3_RETRIES):
         try:
-            pop_conn.rset()
-        except:
-            pass
+            pop_conn = poplib.POP3_SSL(POP3_HOST, timeout=POP3_TIMEOUT)
+            pop_conn.user(POP3_USER)
+            pop_conn.pass_(POP3_PASS)
+            break
+        except Exception as e:
+            print(f"[WARN] POP3 Verbindung fehlgeschlagen (Versuch {attempt + 1}): {e}")
+            time.sleep(5)
+    
+    if not pop_conn:
+        had_fatal_error = True
+        
+    
+    # ======================
+    # UIDLs abrufen
+    # ======================
+    resp, uidl_list, _ = pop_conn.uidl()
+    uidls = {}
+    for entry in uidl_list:
+        num, uid = entry.decode().split()
+        uidls[int(num)] = uid
+    
+    num_messages = len(uidls)
+    print(f"{num_messages} Mails im Quellpostfach gefunden.")
+    
+    # ======================
+    # SMTP Verbindung
+    # ======================
+    smtp = smtplib.SMTP(SMTP_HOST, SMTP_PORT)
+    smtp.starttls()
+    smtp.login(SMTP_USER, SMTP_PASS)
+    
+    # ======================
+    # Weiterleitung
+    # ======================
+    for i in sorted(uidls.keys()):
+        uid = uidls[i]
+    
+        if uid in processed_uidls:
+            print(f"[SKIP] Mail {i} (UIDL bereits verarbeitet)")
+            continue
+    
+        try:
+            resp, lines, octets = pop_conn.retr(i)
+            msg_content = b"\r\n".join(lines)
+            from email import policy
+            from email.parser import BytesParser
+            email_msg = BytesParser(policy=policy.default).parsebytes(msg_content)
+    
+            # Original-Absender und Betreff dekodieren + header-safe
+            from email.utils import parseaddr
+            from_name, from_addr = parseaddr(str(email_msg.get('From', '')))
+            reply_name, reply_addr = parseaddr(str(email_msg.get('Reply-To', '')))
+    
+            # Determine display name
+            if from_name:
+                sender_name = header_safe(from_name)
+            elif reply_name:
+                sender_name = header_safe(reply_name)
+            elif reply_addr and "@" in reply_addr:
+                sender_name = reply_addr.split("@")[0]
+            elif from_addr and "@" in from_addr:
+                sender_name = from_addr.split("@")[0]
+            else:
+                sender_name = "Mail Sender"
+    
+            # Preserve real reply target
+            original_from = reply_addr or from_addr or "unknown@example.com"
+        
+            original_subject = decode_and_safe(email_msg['Subject'])
+    
+            forward = EmailMessage()
+            forward['Subject'] = original_subject
+            forward['From'] = f"{sender_name} <{header_safe(SMTP_FROM)}>"
+            forward['To'] = TARGET_EMAIL
+            forward['Reply-To'] = header_safe(original_from)
+            forward['X-Original-From'] = header_safe(original_from)
+            forward['X-Forwarded-By'] = SMTP_FROM_NAME
+    
+            if email_msg.is_multipart():
+                for part in email_msg.walk():
+                    ctype = part.get_content_type()
+                    cdisp = str(part.get('Content-Disposition'))
+                    payload = part.get_payload(decode=True)
+                    charset = part.get_content_charset() or 'utf-8'
+    
+                    if payload is None:
+                        continue
+    
+                    if ctype == 'text/plain' and 'attachment' not in cdisp:
+                        forward.set_content(payload.decode(charset, errors='replace'))
+                    elif ctype == 'text/html' and 'attachment' not in cdisp:
+                        forward.add_alternative(payload.decode(charset, errors='replace'), subtype='html')
+                    elif 'attachment' in cdisp:
+                        filename = part.get_filename()
+                        if filename:
+                            filename = decode_and_safe(filename)
+                            forward.add_attachment(
+                                payload,
+                                maintype=part.get_content_maintype(),
+                                subtype=part.get_content_subtype(),
+                                filename=filename
+                            )
+            else:
+                payload = email_msg.get_payload(decode=True)
+                charset = email_msg.get_content_charset() or 'utf-8'
+                if payload:
+                    forward.set_content(payload.decode(charset, errors='replace'))
+    
+            smtp.send_message(forward)
+            pop_conn.dele(i)
+    
+            processed_uidls.add(uid)
+            with open(UIDL_FILE, "a") as f:
+                f.write(uid + "\n")
+    
+            print(f"[OK] Mail {i} weitergeleitet.")
+    
+        except Exception as e:
+            print(f"[FEHLER] Mail {i}: {e}")
+            try:
+                pop_conn.rset()
+            except Exception:
+                pass
+    
+    # ======================
+    # Cleanup
+    # ======================
+    pop_conn.quit()
+    smtp.quit()
 
-# ======================
-# Cleanup
-# ======================
-pop_conn.quit()
-smtp.quit()
+except Exception as e:
+    had_fatal_error = True
+    print(f"[FATAL] {e}")
 
 # ======================
 # Finaler Status
