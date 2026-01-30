@@ -93,7 +93,14 @@ for attempt in range(POP3_RETRIES):
 
 if not pop_conn:
     had_fatal_error = True
-    print("[FATAL] POP3 Verbindung nach mehreren Versuchen fehlgeschlagen")
+    failures = read_failures() + 1
+    write_failures(failures)
+    print(f"[FATAL] POP3 Verbindung konnte nicht hergestellt werden. Consecutive failures: {failures}")
+    # Wenn MAX_FAILURES erreicht, Workflow beenden
+    if failures >= MAX_FAILURES:
+        raise RuntimeError("Maximale Anzahl aufeinanderfolgender Fehler erreicht")
+    # Beende das Script hier frühzeitig
+    exit(0)   # <<< kein Crash, Workflow zählt aber den Fehler
     
 
 # ======================
