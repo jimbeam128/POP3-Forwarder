@@ -34,6 +34,14 @@ jobs:
 
       - name: Install dependencies
         run: pip install --upgrade pip
+        
+      - name: Restore failure counter
+        uses: actions/cache@v4
+        with:
+          path: consecutive_failures.txt
+          key: pop3-failure-counter-${{ github.ref }}
+          restore-keys: |
+            pop3-failure-counter-
 
       - name: Run POP3 Forwarder
         run: python forwarder.py
@@ -51,3 +59,8 @@ jobs:
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "**Consecutive failures:** 0 (last run successful)" >> $GITHUB_STEP_SUMMARY
           fi
+      - name: Save updated failure counter
+        uses: actions/cache@v4
+        with:
+          path: consecutive_failures.txt
+          key: pop3-failure-counter-${{ github.ref }}    
