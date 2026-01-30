@@ -91,10 +91,10 @@ for attempt in range(POP3_RETRIES):
         print(f"[WARN] POP3 Verbindung fehlgeschlagen (Versuch {attempt + 1}): {e}")
         time.sleep(5)
 
-if not pop_conn:  # <<< CHANGED
-    had_fatal_error = True  # <<< CHANGED
-    print(f"[FATAL] POP3 Verbindung konnte nicht hergestellt werden.")  # <<< CHANGED
-    # UIDL/SMTP-Bereich wird nicht ausgeführt
+if not pop_conn or pop_conn.welcome.startswith(b'-ERR'):  # <<< CHANGED
+    had_fatal_error = True
+    print("[FATAL] POP3 Verbindung / Login fehlgeschlagen. UIDL/SMTP wird nicht ausgeführt.")  # <<< CHANGED
+    pop_conn = None  # Sicherheit: kein pop_conn nutzen
 else:  # <<< CHANGED
     # ======================
     # UIDLs abrufen
