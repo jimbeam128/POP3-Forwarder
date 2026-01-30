@@ -99,6 +99,7 @@ if not pop_conn:
     print(f"[FATAL] POP3 Verbindung konnte nicht hergestellt werden. Consecutive failures: {failures}")
     if failures >= MAX_FAILURES:
         raise RuntimeError("Maximale Anzahl aufeinanderfolgender Fehler erreicht")
+        exit(0)
 else:
     # Verbindung erfolgreich, Counter zurücksetzen
     write_failures(0)
