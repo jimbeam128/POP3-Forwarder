@@ -91,41 +91,33 @@ for attempt in range(POP3_RETRIES):
         print(f"[WARN] POP3 Verbindung fehlgeschlagen (Versuch {attempt + 1}): {e}")
         time.sleep(5)
 
-if not pop_conn:
-    had_fatal_error = True
-    failures = read_failures() + 1
-    write_failures(failures)
-    print(f"[FATAL] POP3 Verbindung konnte nicht hergestellt werden. Consecutive failures: {failures}")
-    # Wenn MAX_FAILURES erreicht, Workflow beenden
-    if failures >= MAX_FAILURES:
-        raise RuntimeError("Maximale Anzahl aufeinanderfolgender Fehler erreicht")
-    # Beende das Script hier frühzeitig
-    exit(0)   # <<< kein Crash, Workflow zählt aber den Fehler
-    
+if not pop_conn:  # <<< CHANGED
+    had_fatal_error = True  # <<< CHANGED
+    print(f"[FATAL] POP3 Verbindung konnte nicht hergestellt werden.")  # <<< CHANGED
+    # UIDL/SMTP-Bereich wird nicht ausgeführt
+else:  # <<< CHANGED
+    # ======================
+    # UIDLs abrufen
+    # ======================
+    resp, uidl_list, _ = pop_conn.uidl()
+    uidls = {}
+    for entry in uidl_list:
+        num, uid = entry.decode().split()
+        uidls[int(num)] = uid
 
-# ======================
-# UIDLs abrufen
-# ======================
-resp, uidl_list, _ = pop_conn.uidl()
-uidls = {}
-for entry in uidl_list:
-    num, uid = entry.decode().split()
-    uidls[int(num)] = uid
+    num_messages = len(uidls)
+    print(f"{num_messages} Mails im Quellpostfach gefunden.")
 
-num_messages = len(uidls)
-print(f"{num_messages} Mails im Quellpostfach gefunden.")
+    # ======================
+    # SMTP Verbindung
+    # ======================
+    smtp = smtplib.SMTP(SMTP_HOST, SMTP_PORT)
+    smtp.starttls()
+    smtp.login(SMTP_USER, SMTP_PASS)
 
-# ======================
-# SMTP Verbindung
-# ======================
-smtp = smtplib.SMTP(SMTP_HOST, SMTP_PORT)
-smtp.starttls()
-smtp.login(SMTP_USER, SMTP_PASS)
-
-# ======================
-# Weiterleitung
-# ======================
-if not had_fatal_error:
+    # ======================
+    # Weiterleitung
+    # ======================
     for i in sorted(uidls.keys()):
         uid = uidls[i]
     
