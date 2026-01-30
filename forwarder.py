@@ -215,18 +215,18 @@ try:
         pop_conn.quit()
         smtp.quit()
 
-# ======================
-# Finaler Status
-# ======================
-failures = read_failures()
-if had_fatal_error:
-    failures += 1
-    write_failures(failures)
-    print(f"[WARN] Fehlgeschlagene Läufe in Folge: {failures}")
-    if failures >= MAX_FAILURES:
-        raise RuntimeError("Maximale Anzahl aufeinanderfolgender Fehler erreicht")
-else:
-    write_failures(0)
-    print("Status: Erfolg")
-
-print("Alle Mails verarbeitet.")
+    # ======================
+    # Finaler Status
+    # ======================
+    failures = read_failures()
+    if had_fatal_error:
+        failures += 1
+        write_failures(failures)
+        print(f"[WARN] Fehlgeschlagene Läufe in Folge: {failures}")
+        if failures >= MAX_FAILURES:
+            raise RuntimeError("Maximale Anzahl aufeinanderfolgender Fehler erreicht")
+    else:
+        write_failures(0)
+        print("Status: Erfolg")
+    
+    print("Alle Mails verarbeitet.")
