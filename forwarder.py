@@ -25,20 +25,6 @@ def decode_and_safe(header_value):
         print(f"[DEBUG] Subject decode error: {e}")
         return "(invalid subject)"
 
-def get_text_from_part(part):
-    """Return safe string from email part, never None"""
-    try:
-        payload = part.get_payload(decode=True)
-        if payload is None:
-            return ""
-        charset = part.get_content_charset() or part.get_charset() or "utf-8"
-        if isinstance(payload, bytes):
-            return payload.decode(charset, errors="replace")
-        return str(payload)
-    except Exception as e:
-        print(f"[DEBUG] payload decode failed: {e}")
-        return ""
-
 # ======================
 # POP3 Konfiguration
 # ======================
@@ -127,42 +113,75 @@ for i in sorted(uidls.keys()):
         forward['Reply-To'] = original_from
 
         # ======================
-        # BODY + ATTACHMENTS
+        # BODY + ATTACHMENTS MIT DEBUGGING
         # ======================
         if email_msg.is_multipart():
             print("[DEBUG] multipart detected")
-            for part in email_msg.walk():
+            for idx, part in enumerate(email_msg.walk(), 1):
                 if part.is_multipart():
+                    print(f"[DEBUG] Part {idx} is multipart container, skipping")
                     continue
+
                 ctype = part.get_content_type()
                 disp = str(part.get("Content-Disposition") or "").lower()
+                payload = part.get_payload(decode=True)
+                charset = part.get_content_charset() or part.get_charset() or "utf-8"
+
+                print(f"[DEBUG] Part {idx}: content_type={ctype}, content_disposition={disp}")
+                print(f"[DEBUG] Part {idx}: payload_type={type(payload)}, charset={charset}")
+
+                if payload is None:
+                    print(f"[WARN] Part {idx} payload is None, skipping decode")
+                    continue
+                else:
+                    preview = payload[:100] if isinstance(payload, bytes) else str(payload)[:100]
+                    print(f"[DEBUG] Part {idx}: payload preview: {preview!r}")
 
                 if "attachment" in disp:
-                    try:
-                        fname = part.get_filename()
-                        fdata = part.get_payload(decode=True)
-                        if fname and fdata:
-                            forward.add_attachment(fdata, maintype=part.get_content_maintype(),
+                    fname = part.get_filename()
+                    if fname:
+                        try:
+                            forward.add_attachment(payload,
+                                                   maintype=part.get_content_maintype(),
                                                    subtype=part.get_content_subtype(),
                                                    filename=fname)
-                            print(f"[DEBUG] Attachment hinzugefügt: {fname}, {len(fdata)} Bytes")
-                    except Exception as e:
-                        print(f"[WARN] Attachment konnte nicht angehängt werden: {e}")
+                            print(f"[DEBUG] Attachment hinzugefügt: {fname}, {len(payload)} Bytes")
+                        except Exception as e:
+                            print(f"[WARN] Attachment {fname} konnte nicht angehängt werden: {e}")
                     continue
 
-                # Normaler Text / HTML
-                text = get_text_from_part(part)
-                if not text.strip():
+                # Text/HTML Handling
+                try:
+                    text = payload.decode(charset, errors="replace") if isinstance(payload, bytes) else str(payload)
+                except Exception as e:
+                    print(f"[ERROR] decode failed for Part {idx}: {e}")
                     continue
+
                 if ctype == "text/plain":
                     if not forward.get_content():
                         forward.set_content(text)
                 elif ctype == "text/html":
                     forward.add_alternative(text, subtype="html")
+
         else:
             print("[DEBUG] singlepart detected")
             ctype = email_msg.get_content_type()
-            text = get_text_from_part(email_msg)
+            payload = email_msg.get_payload(decode=True)
+            charset = email_msg.get_content_charset() or email_msg.get_charset() or "utf-8"
+
+            print(f"[DEBUG] singlepart content_type={ctype}, payload_type={type(payload)}, charset={charset}")
+            if payload is None:
+                print("[WARN] Singlepart payload is None, skipping decode")
+                text = ""
+            else:
+                preview = payload[:100] if isinstance(payload, bytes) else str(payload)[:100]
+                print(f"[DEBUG] Singlepart payload preview: {preview!r}")
+                try:
+                    text = payload.decode(charset, errors="replace") if isinstance(payload, bytes) else str(payload)
+                except Exception as e:
+                    print(f"[ERROR] decode failed for singlepart: {e}")
+                    text = ""
+
             if ctype == "text/plain":
                 forward.set_content(text)
             elif ctype == "text/html":
@@ -174,21 +193,8 @@ for i in sorted(uidls.keys()):
         # ======================
         # Mail senden
         # ======================
-        try:
-            smtp.send_message(forward)
-        except Exception as e:
-            print(f"[FEHLER] Mail {i} konnte nicht gesendet werden: {e}")
-            try:
-                pop_conn.rset()  # nur RSET wenn Mail nicht gesendet
-            except Exception:
-                pass
-        else:
-            # Mail erfolgreich gesendet → löschen
-            try:
-                pop_conn.dele(i)
-                print(f"[OK] Mail {i} weitergeleitet & gelöscht")
-            except Exception as e:
-                print(f"[WARN] Mail {i} konnte nicht gelöscht werden: {e}")
+        smtp.send_message(forward)
+        print(f"[OK] Mail {i} weitergeleitet (noch nicht gelöscht, nur Debug)")
 
     except Exception as e:
         print(f"[FEHLER] Mail {i}: {e}")
@@ -202,4 +208,4 @@ for i in sorted(uidls.keys()):
 # ======================
 smtp.quit()
 pop_conn.quit()
-print("\nAlle Mails verarbeitet.")
+print("\nAlle Mails verarbeitet (noch nicht gelöscht, Debug-Only).")
