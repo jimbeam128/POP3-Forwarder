@@ -136,6 +136,13 @@ for i in sorted(uidls.keys()):
                     continue
 
                 ctype = part.get_content_type()
+                print("===== DEBUG PAYLOAD START =====")
+                print(f"Part content type: {part.get_content_type()}")
+                print(f"Part Content-Transfer-Encoding: {part.get('Content-Transfer-Encoding')}")
+                print(f"Payload object: {repr(payload)}")
+                print(f"Payload type: {type(payload)}")
+                print("===== DEBUG PAYLOAD END =====")
+
                 payload = part.get_payload(decode=True)
                 charset = part.get_content_charset() or part.get_charset() or "utf-8"
 
@@ -179,6 +186,13 @@ for i in sorted(uidls.keys()):
 
         else:
             print("[DEBUG] singlepart detected")
+
+            print("===== DEBUG SINGLEPAYLOAD START =====")
+            print(f"Content type: {email_msg.get_content_type()}")
+            print(f"Content-Transfer-Encoding: {email_msg.get('Content-Transfer-Encoding')}")
+            print(f"Payload object: {repr(payload)}")
+            print(f"Payload type: {type(payload)}")
+            print("===== DEBUG SINGLEPAYLOAD END =====")
 
             payload = email_msg.get_payload(decode=True)
             charset = email_msg.get_content_charset() or email_msg.get_charset() or "utf-8"
