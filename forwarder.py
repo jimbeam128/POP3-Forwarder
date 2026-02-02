@@ -197,7 +197,12 @@ if not had_fatal_error and pop_logged_in:
                     if ctype == 'text/plain' and 'attachment' not in cdisp:
                         forward.set_content(payload.decode(charset, errors='replace'))
                     elif ctype == 'text/html' and 'attachment' not in cdisp:
-                        forward.add_alternative(payload.decode(charset, errors='replace'), subtype='html')
+                        if not forward.get_content():
+                            forward.set_content("Diese Nachricht enthält HTML-Inhalt.")
+                        forward.add_alternative(
+                            payload.decode(charset, errors='replace'),
+                            subtype='html'
+                        )
                     elif 'attachment' in cdisp:
                         filename = part.get_filename()
                         if filename:
