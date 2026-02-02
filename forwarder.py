@@ -213,7 +213,12 @@ if not had_fatal_error and pop_logged_in:
                 if payload:
                     forward.set_content(payload.decode(charset, errors='replace'))
 
-            smtp.send_message(forward)
+            smtp.send_message(
+                forward,
+                from_addr=SMTP_FROM,
+                to_addrs=[TARGET_EMAIL]
+            )
+
             pop_conn.dele(i)
 
             processed_uidls.add(uid)
