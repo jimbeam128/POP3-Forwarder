@@ -169,7 +169,7 @@ if not had_fatal_error and pop_logged_in:
 
                     ctype = part.get_content_type()
                     cdisp = str(part.get('Content-Disposition'))
-                    charset = part.get_content_charset() or "utf-8"
+                    charset = part.get_content_charset() or part.get_charset() or 'utf-8'
 
                     if ctype == "text/plain" and "attachment" not in cdisp:
                         forward.set_content(payload.decode(charset, errors="replace"))
@@ -192,7 +192,7 @@ if not had_fatal_error and pop_logged_in:
             else:
                 payload = email_msg.get_payload(decode=True)
                 if payload is not None:
-                    charset = email_msg.get_content_charset() or "utf-8"
+                    charset = email_msg.get_content_charset() or email_msg.get_charset() or 'utf-8'
                     if email_msg.get_content_type() == "text/html":
                         forward.set_content("HTML-Mail (Text nicht verfügbar)")
                         forward.add_alternative(
