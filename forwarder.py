@@ -141,8 +141,26 @@ for i in sorted(uidls.keys()):
 
                 print(f"[DEBUG] usable part: {ctype}, payload={type(payload)}, charset={charset}")
 
+                # 🔥 Zusätzlicher Schutz gegen None-Payload
                 if payload is None:
-                    continue
+                    payload = b""
+
+                # Falls der Payload noch ein str ist (nicht bytes), in bytes konvertieren
+                if isinstance(payload, str):
+                    payload = payload.encode(charset, errors="replace")
+
+                charset = str(charset)
+
+                if ctype == "text/plain":
+                    forward.set_content(payload.decode(charset, errors="replace"))
+                elif ctype == "text/html":
+                    if not forward.get_content():
+                        forward.set_content("HTML-Mail (Text nicht verfügbar)")
+                    forward.add_alternative(
+                        payload.decode(charset, errors="replace"),
+                        subtype="html"
+                    )
+
 
                 if isinstance(payload, str):
                     payload = payload.encode(str(charset), errors="replace")
