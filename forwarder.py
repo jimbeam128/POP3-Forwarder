@@ -9,7 +9,7 @@ from email import policy
 from email.parser import BytesParser
 
 # ======================
-# Helper
+# Helper Funktionen
 # ======================
 def header_safe(value):
     if not value:
@@ -43,7 +43,6 @@ SMTP_USER = os.environ['SMTP_USER']
 SMTP_PASS = os.environ['SMTP_PASS']
 SMTP_FROM = os.environ['SMTP_FROM']
 SMTP_FROM_NAME = "POP3 Forwarder"
-
 TARGET_EMAIL = os.environ['TARGET_EMAIL']
 
 # ======================
@@ -78,21 +77,21 @@ if not pop_conn:
 # ======================
 resp, uidl_list, _ = pop_conn.uidl()
 uidls = {int(e.decode().split()[0]): e.decode().split()[1] for e in uidl_list}
+
 print(f"{len(uidls)} Mails im Quellpostfach gefunden.")
 
 # ======================
-# SMTP Verbindung
+# SMTP Setup
 # ======================
 smtp = smtplib.SMTP(SMTP_HOST, SMTP_PORT)
 smtp.starttls()
 smtp.login(SMTP_USER, SMTP_PASS)
 
 # ======================
-# Verarbeitung
+# Mail Verarbeitung
 # ======================
 for i in sorted(uidls.keys()):
     print(f"\n[DEBUG] === Mail {i} ===")
-
     try:
         resp, lines, _ = pop_conn.retr(i)
         raw = b"\r\n".join(lines)
@@ -117,78 +116,55 @@ for i in sorted(uidls.keys()):
         forward['To'] = TARGET_EMAIL
         forward['Subject'] = subject
         forward['Reply-To'] = original_from
-        forward['X-Forwarded-By'] = SMTP_FROM_NAME
-        forward.set_charset('utf-8')
 
         # ======================
-        # BODY DEBUG + SAFE HANDLING
+        # BODY HANDLING
         # ======================
+        def get_text_from_part(part):
+            payload = part.get_payload(decode=True)
+            charset = part.get_content_charset() or part.get_charset() or "utf-8"
+            if payload is None:
+                return ""
+            if isinstance(payload, bytes):
+                try:
+                    return payload.decode(charset, errors="replace")
+                except Exception as e:
+                    print(f"[DEBUG] decode error: {e}")
+                    return ""
+            return str(payload)
+
         if email_msg.is_multipart():
             print("[DEBUG] multipart detected")
-
             for part in email_msg.walk():
                 if part.is_multipart():
+                    continue  # skip container
+                ctype = part.get_content_type()
+                text = get_text_from_part(part)
+                print(f"[DEBUG] usable part: {ctype}, length={len(text)}")
+
+                if not text.strip():
                     continue
 
-                # Payload abrufen
-                payload = part.get_payload(decode=True)
-                charset = part.get_content_charset() or part.get_charset() or "utf-8"
-
-                print("===== DEBUG PAYLOAD START =====")
-                print(f"Part content type: {part.get_content_type()}")
-                print(f"Part Content-Transfer-Encoding: {part.get('Content-Transfer-Encoding')}")
-                print(f"Payload object: {repr(payload)}")
-                print(f"Payload type: {type(payload)}")
-                print(f"Charset: {charset}")
-                print("===== DEBUG PAYLOAD END =====")
-
-                if payload is None:
-                    print("[DEBUG] Skipping empty part")
-                    continue
-
-                if isinstance(payload, str):
-                    payload = payload.encode(str(charset), errors="replace")
-
-                charset = str(charset)
-
-                if part.get_content_type() == "text/plain":
-                    forward.set_content(payload.decode(charset, errors="replace"))
-                elif part.get_content_type() == "text/html":
+                if ctype == "text/plain":
+                    forward.set_content(text)
+                elif ctype == "text/html":
                     if not forward.get_content():
                         forward.set_content("HTML-Mail (Text nicht verfügbar)")
-                    forward.add_alternative(payload.decode(charset, errors="replace"), subtype="html")
-
+                    forward.add_alternative(text, subtype="html")
         else:
             print("[DEBUG] singlepart detected")
+            ctype = email_msg.get_content_type()
+            text = get_text_from_part(email_msg)
+            print(f"[DEBUG] singlepart content type: {ctype}, length={len(text)}")
 
-            payload = email_msg.get_payload(decode=True)
-            charset = email_msg.get_content_charset() or email_msg.get_charset() or "utf-8"
-
-            print("===== DEBUG SINGLEPAYLOAD START =====")
-            print(f"Content type: {email_msg.get_content_type()}")
-            print(f"Content-Transfer-Encoding: {email_msg.get('Content-Transfer-Encoding')}")
-            print(f"Payload object: {repr(payload)}")
-            print(f"Payload type: {type(payload)}")
-            print(f"Charset: {charset}")
-            print("===== DEBUG SINGLEPAYLOAD END =====")
-
-            if payload is None:
-                payload = b""
-
-            if isinstance(payload, str):
-                payload = payload.encode(str(charset), errors="replace")
-
-            charset = str(charset)
-
-            if email_msg.get_content_type() == "text/html":
+            if ctype == "text/plain":
+                forward.set_content(text)
+            elif ctype == "text/html":
                 forward.set_content("HTML-Mail (Text nicht verfügbar)")
-                forward.add_alternative(payload.decode(charset, errors="replace"), subtype="html")
+                forward.add_alternative(text, subtype="html")
             else:
-                forward.set_content(payload.decode(charset, errors="replace"))
+                forward.set_content(text)
 
-        # ======================
-        # Mail senden & löschen
-        # ======================
         smtp.send_message(forward)
         pop_conn.dele(i)
         print(f"[OK] Mail {i} weitergeleitet & gelöscht")
