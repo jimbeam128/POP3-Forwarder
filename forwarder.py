@@ -241,7 +241,7 @@ if not had_fatal_error and pop_logged_in:
             print(f"[OK] Mail {i} weitergeleitet.")
 
         except Exception as e:
-            print(f"[FEHLER] Mail {i}: {e}")
+            print(f"[FEHLER] Mail {i}: {e} - {original_subject}")
             try:
                 pop_conn.rset()
             except Exception:
