@@ -127,55 +127,55 @@ for i in sorted(uidls.keys()):
         forward['Reply-To'] = original_from
 
         # ======================
-		# BODY HANDLING inkl. Attachments
-		# ======================
-		if email_msg.is_multipart():
-			print("[DEBUG] multipart detected")
-			for part in email_msg.walk():
-				if part.is_multipart():  # Container überspringen
-					continue
-		
-				ctype = part.get_content_type()
-				filename = part.get_filename()  # Attachment?
-		
-				# Wenn Attachment vorhanden, hinzufügen
-				if filename:
-					payload = part.get_payload(decode=True) or b""
-					maintype = part.get_content_maintype()
-					subtype = part.get_content_subtype()
-					forward.add_attachment(
-						payload,
-						maintype=maintype,
-						subtype=subtype,
-						filename=filename
-					)
-					print(f"[DEBUG] Attachment hinzugefügt: {filename}, {len(payload)} Bytes")
-					continue  # nächste part
-		
-				# Kein Attachment → Text/HTML
-				text = get_text_from_part(part)
-				print(f"[DEBUG] usable part: {ctype}, length={len(text)}")
-				if not text.strip():
-					continue
-				if ctype == "text/plain":
-					if not forward.get_content():
-						forward.set_content(text)
-				elif ctype == "text/html":
-					forward.add_alternative(text, subtype="html")
-		
-		else:
-			# singlepart unverändert
-			print("[DEBUG] singlepart detected")
-			ctype = email_msg.get_content_type()
-			text = get_text_from_part(email_msg)
-			print(f"[DEBUG] singlepart content type: {ctype}, length={len(text)}")
-			if ctype == "text/plain":
-				forward.set_content(text)
-			elif ctype == "text/html":
-				forward.set_content("HTML-Mail (Text nicht verfügbar)")
-				forward.add_alternative(text, subtype="html")
-			else:
-				forward.set_content(text)
+        # BODY HANDLING inkl. Attachments
+        # ======================
+        if email_msg.is_multipart():
+        	print("[DEBUG] multipart detected")
+        	for part in email_msg.walk():
+        		if part.is_multipart():  # Container überspringen
+        			continue
+        
+        		ctype = part.get_content_type()
+        		filename = part.get_filename()  # Attachment?
+        
+        		# Wenn Attachment vorhanden, hinzufügen
+        		if filename:
+        			payload = part.get_payload(decode=True) or b""
+        			maintype = part.get_content_maintype()
+        			subtype = part.get_content_subtype()
+        			forward.add_attachment(
+        				payload,
+        				maintype=maintype,
+        				subtype=subtype,
+        				filename=filename
+        			)
+        			print(f"[DEBUG] Attachment hinzugefügt: {filename}, {len(payload)} Bytes")
+        			continue  # nächste part
+        
+        		# Kein Attachment → Text/HTML
+        		text = get_text_from_part(part)
+        		print(f"[DEBUG] usable part: {ctype}, length={len(text)}")
+        		if not text.strip():
+        			continue
+        		if ctype == "text/plain":
+        			if not forward.get_content():
+        				forward.set_content(text)
+        		elif ctype == "text/html":
+        			forward.add_alternative(text, subtype="html")
+        
+        else:
+        	# singlepart unverändert
+        	print("[DEBUG] singlepart detected")
+        	ctype = email_msg.get_content_type()
+        	text = get_text_from_part(email_msg)
+        	print(f"[DEBUG] singlepart content type: {ctype}, length={len(text)}")
+        	if ctype == "text/plain":
+        		forward.set_content(text)
+        	elif ctype == "text/html":
+        		forward.set_content("HTML-Mail (Text nicht verfügbar)")
+        		forward.add_alternative(text, subtype="html")
+        	else:
+        		forward.set_content(text)
 
 
         # ======================
