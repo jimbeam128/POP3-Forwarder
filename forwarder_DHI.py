@@ -113,11 +113,13 @@ for i in sorted(uidls.keys()):
         return_path = email_msg.get('Return-Path', '')
         _, return_addr = parseaddr(return_path)
         original_from = reply_addr or from_addr or return_addr or "unknown@example.com"
+
         sender_name = (
             header_safe(from_name)
             or header_safe(reply_name)
             or original_from.split("@")[0]
         )
+
         subject = decode_and_safe(email_msg.get('Subject'))
 
         forward = EmailMessage()
@@ -127,35 +129,62 @@ for i in sorted(uidls.keys()):
         forward['Reply-To'] = original_from
 
         # ======================
-        # BODY HANDLING
+        # BODY HANDLING (FIX für Python 3.14)
         # ======================
+        body_set = False
+
         if email_msg.is_multipart():
             print("[DEBUG] multipart detected")
+
             for part in email_msg.walk():
-                if part.is_multipart():  # Container überspringen
+                if part.is_multipart():
                     continue
+
                 ctype = part.get_content_type()
+                disposition = part.get_content_disposition()
                 text = get_text_from_part(part)
+
                 print(f"[DEBUG] usable part: {ctype}, length={len(text)}")
-                if not text.strip():
-                    continue
-                if ctype == "text/plain":
-                    if not forward.get_content():
-                        forward.set_content(text)
-                elif ctype == "text/html":
-                    forward.add_alternative(text, subtype="html")
+
+                # TEXT
+                if disposition is None:
+                    if ctype == "text/plain" and text.strip():
+                        if not body_set:
+                            forward.set_content(text)
+                            body_set = True
+
+                    elif ctype == "text/html" and text.strip():
+                        if not body_set:
+                            forward.set_content("Diese E-Mail enthält HTML-Inhalt.")
+                            body_set = True
+                        forward.add_alternative(text, subtype="html")
+
+                # ATTACHMENTS
+                elif disposition == "attachment":
+                    payload = part.get_payload(decode=True)
+                    filename = part.get_filename()
+                    if payload:
+                        forward.add_attachment(
+                            payload,
+                            maintype=part.get_content_maintype(),
+                            subtype=part.get_content_subtype(),
+                            filename=filename
+                        )
+                        print(f"[DEBUG] Attachment hinzugefügt: {filename}, {len(payload)} Bytes")
+
         else:
             print("[DEBUG] singlepart detected")
+
             ctype = email_msg.get_content_type()
             text = get_text_from_part(email_msg)
-            print(f"[DEBUG] singlepart content type: {ctype}, length={len(text)}")
+
             if ctype == "text/plain":
-                forward.set_content(text)
+                forward.set_content(text or "")
             elif ctype == "text/html":
-                forward.set_content("HTML-Mail (Text nicht verfügbar)")
+                forward.set_content("Diese E-Mail enthält HTML-Inhalt.")
                 forward.add_alternative(text, subtype="html")
             else:
-                forward.set_content(text)
+                forward.set_content(text or "")
 
         # ======================
         # Mail senden & löschen
