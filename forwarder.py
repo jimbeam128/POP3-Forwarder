@@ -217,7 +217,14 @@ if not had_fatal_error and pop_logged_in:
                 payload = email_msg.get_payload(decode=True)
                 charset = email_msg.get_content_charset() or 'utf-8'
                 if payload:
-                    forward.set_content(payload.decode(charset, errors='replace'))
+                    # Prüfen, ob es HTML ist
+                    content_type = email_msg.get_content_type()
+                    if content_type == "text/html":
+                        # Multipart/alternative mit Plaintext-Fallback
+                        forward.set_content("HTML-Mail (Text nicht verfügbar)")  # einfacher Plaintext-Fallback
+                        forward.add_alternative(payload.decode(charset, errors="replace"), subtype="html")
+                    else:
+                        forward.set_content(payload.decode(charset, errors="replace"))
 
             smtp.send_message(
                 forward,
