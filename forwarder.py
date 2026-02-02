@@ -23,7 +23,7 @@ def decode_and_safe(header_value):
         return header_safe(str(make_header(decode_header(header_value))))
     except Exception as e:
         print(f"[DEBUG] Subject decode error: {e}")
-        return "(invalid subject)")
+        return "(invalid subject)"
 
 # 🔥 FIX: robuste Text-Extraktion (decode=True → Fallback)
 def get_text_from_part(part, mail_index, part_index):
