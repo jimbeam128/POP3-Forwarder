@@ -164,12 +164,27 @@ if not had_fatal_error and pop_logged_in:
             if email_msg.is_multipart():
                 for part in email_msg.walk():
                     payload = part.get_payload(decode=True)
+                    charset = part.get_content_charset() or part.get_charset() or 'utf-8'
+
+                    print("---- DEBUG PART ----")
+                    print("Content-Type:", part.get_content_type())
+                    print("Content-Disposition:", part.get('Content-Disposition'))
+                    print("Payload type:", type(payload))
+                    print("Charset:", charset)
+                    print("--------------------")
+
                     if payload is None:
+                        print("[DEBUG] payload is None → skip")
                         continue
+
+                    if isinstance(payload, str):
+                        print("[DEBUG] payload is str → convert to bytes")
+                        payload = payload.encode(charset, errors="replace")
+
 
                     ctype = part.get_content_type()
                     cdisp = str(part.get('Content-Disposition'))
-                    charset = part.get_content_charset() or part.get_charset() or 'utf-8'
+                    
 
                     if ctype == "text/plain" and "attachment" not in cdisp:
                         forward.set_content(payload.decode(charset, errors="replace"))
@@ -189,18 +204,30 @@ if not had_fatal_error and pop_logged_in:
                                 subtype=part.get_content_subtype(),
                                 filename=decode_and_safe(filename)
                             )
+            xx                
             else:
                 payload = email_msg.get_payload(decode=True)
-                if payload is not None:
-                    charset = email_msg.get_content_charset() or email_msg.get_charset() or 'utf-8'
-                    if email_msg.get_content_type() == "text/html":
-                        forward.set_content("HTML-Mail (Text nicht verfügbar)")
-                        forward.add_alternative(
-                            payload.decode(charset, errors="replace"),
-                            subtype="html"
-                        )
-                    else:
-                        forward.set_content(payload.decode(charset, errors="replace"))
+                charset = email_msg.get_content_charset() or email_msg.get_charset() or 'utf-8'
+
+                if payload is None:
+                    payload = b""
+
+                # 🔒 ABSICHERUNG: payload MUSS bytes sein
+                if isinstance(payload, str):
+                    payload = payload.encode(str(charset), errors="replace")
+
+                # 🔒 ABSICHERUNG: charset MUSS str sein
+                charset = str(charset)
+
+                if email_msg.get_content_type() == "text/html":
+                    forward.set_content("HTML-Mail (Text nicht verfügbar)")
+                    forward.add_alternative(
+                        payload.decode(charset, errors="replace"),
+                        subtype="html"
+                    )
+                else:
+                    forward.set_content(payload.decode(charset, errors="replace"))
+
 
             smtp.send_message(forward, from_addr=SMTP_FROM, to_addrs=[TARGET_EMAIL])
             pop_conn.dele(i)
