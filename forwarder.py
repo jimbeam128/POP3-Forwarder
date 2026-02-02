@@ -144,20 +144,30 @@ if not had_fatal_error:
             from_name, from_addr = parseaddr(str(email_msg.get('From', '')))
             reply_name, reply_addr = parseaddr(str(email_msg.get('Reply-To', '')))
 
-            # Determine display name
+            # ---- Absender robust bestimmen ----
+            return_path = email_msg.get('Return-Path', '')
+            _, return_addr = parseaddr(return_path)
+
+            from_name, from_addr = parseaddr(str(email_msg.get('From', '')))
+            reply_name, reply_addr = parseaddr(str(email_msg.get('Reply-To', '')))
+
+            # Antwort-Adresse (Priorität!)
+            original_from = (
+                reply_addr
+                or from_addr
+                or return_addr
+                or "unknown@example.com"
+            )
+
+            # Anzeigename
             if from_name:
                 sender_name = header_safe(from_name)
             elif reply_name:
                 sender_name = header_safe(reply_name)
-            elif reply_addr and "@" in reply_addr:
-                sender_name = reply_addr.split("@")[0]
-            elif from_addr and "@" in from_addr:
-                sender_name = from_addr.split("@")[0]
+            elif original_from and "@" in original_from:
+                sender_name = original_from.split("@")[0]
             else:
                 sender_name = "Mail Sender"
-
-            # Preserve real reply target
-            original_from = reply_addr or from_addr or "unknown@example.com"
 
             original_subject = decode_and_safe(email_msg['Subject'])
 
