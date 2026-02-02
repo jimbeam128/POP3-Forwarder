@@ -78,21 +78,25 @@ if os.path.exists(UIDL_FILE):
 # Verbindung zu POP3 (mit Retry)
 # ======================
 pop_conn = None
+pop_logged_in = False
+
 for attempt in range(POP3_RETRIES):
     try:
         pop_conn = poplib.POP3_SSL(POP3_HOST, timeout=POP3_TIMEOUT)
         pop_conn.user(POP3_USER)
         pop_conn.pass_(POP3_PASS)
+        pop_logged_in = True
         break
     except Exception as e:
         print(f"[WARN] POP3 Verbindung fehlgeschlagen (Versuch {attempt + 1}): {e}")
+        pop_conn = None
         time.sleep(5)
 
 # ======================
 # Fehlerbehandlung / Counter
 # ======================
 failures = read_failures()
-if not pop_conn:
+if not pop_logged_in:
     had_fatal_error = True
     failures += 1
     write_failures(failures)
@@ -107,7 +111,7 @@ else:
 # ======================
 # Wenn fatal error -> Script beendet, kein Zugriff auf pop_conn
 # ======================
-if not had_fatal_error:
+if not had_fatal_error and pop_logged_in:
     # ======================
     # UIDLs abrufen
     # ======================
