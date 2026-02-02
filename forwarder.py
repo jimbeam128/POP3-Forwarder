@@ -127,63 +127,68 @@ for i in sorted(uidls.keys()):
         forward['Reply-To'] = original_from
 
         # ======================
-        # BODY HANDLING inkl. Attachments
+        # BODY + ATTACHMENTS
         # ======================
         if email_msg.is_multipart():
-        	print("[DEBUG] multipart detected")
-        	for part in email_msg.walk():
-        		if part.is_multipart():  # Container überspringen
-        			continue
-        
-        		ctype = part.get_content_type()
-        		filename = part.get_filename()  # Attachment?
-        
-        		# Wenn Attachment vorhanden, hinzufügen
-        		if filename:
-        			payload = part.get_payload(decode=True) or b""
-        			maintype = part.get_content_maintype()
-        			subtype = part.get_content_subtype()
-        			forward.add_attachment(
-        				payload,
-        				maintype=maintype,
-        				subtype=subtype,
-        				filename=filename
-        			)
-        			print(f"[DEBUG] Attachment hinzugefügt: {filename}, {len(payload)} Bytes")
-        			continue  # nächste part
-        
-        		# Kein Attachment → Text/HTML
-        		text = get_text_from_part(part)
-        		print(f"[DEBUG] usable part: {ctype}, length={len(text)}")
-        		if not text.strip():
-        			continue
-        		if ctype == "text/plain":
-        			if not forward.get_content():
-        				forward.set_content(text)
-        		elif ctype == "text/html":
-        			forward.add_alternative(text, subtype="html")
-        
+            print("[DEBUG] multipart detected")
+            for part in email_msg.walk():
+                if part.is_multipart():
+                    continue
+                ctype = part.get_content_type()
+                disp = str(part.get("Content-Disposition") or "").lower()
+
+                if "attachment" in disp:
+                    try:
+                        fname = part.get_filename()
+                        fdata = part.get_payload(decode=True)
+                        if fname and fdata:
+                            forward.add_attachment(fdata, maintype=part.get_content_maintype(),
+                                                   subtype=part.get_content_subtype(),
+                                                   filename=fname)
+                            print(f"[DEBUG] Attachment hinzugefügt: {fname}, {len(fdata)} Bytes")
+                    except Exception as e:
+                        print(f"[WARN] Attachment konnte nicht angehängt werden: {e}")
+                    continue
+
+                # Normaler Text / HTML
+                text = get_text_from_part(part)
+                if not text.strip():
+                    continue
+                if ctype == "text/plain":
+                    if not forward.get_content():
+                        forward.set_content(text)
+                elif ctype == "text/html":
+                    forward.add_alternative(text, subtype="html")
         else:
-        	# singlepart unverändert
-        	print("[DEBUG] singlepart detected")
-        	ctype = email_msg.get_content_type()
-        	text = get_text_from_part(email_msg)
-        	print(f"[DEBUG] singlepart content type: {ctype}, length={len(text)}")
-        	if ctype == "text/plain":
-        		forward.set_content(text)
-        	elif ctype == "text/html":
-        		forward.set_content("HTML-Mail (Text nicht verfügbar)")
-        		forward.add_alternative(text, subtype="html")
-        	else:
-        		forward.set_content(text)
-
+            print("[DEBUG] singlepart detected")
+            ctype = email_msg.get_content_type()
+            text = get_text_from_part(email_msg)
+            if ctype == "text/plain":
+                forward.set_content(text)
+            elif ctype == "text/html":
+                forward.set_content("HTML-Mail (Text nicht verfügbar)")
+                forward.add_alternative(text, subtype="html")
+            else:
+                forward.set_content(text)
 
         # ======================
-        # Mail senden & löschen
+        # Mail senden
         # ======================
-        smtp.send_message(forward)
-        pop_conn.dele(i)
-        print(f"[OK] Mail {i} weitergeleitet & gelöscht")
+        try:
+            smtp.send_message(forward)
+        except Exception as e:
+            print(f"[FEHLER] Mail {i} konnte nicht gesendet werden: {e}")
+            try:
+                pop_conn.rset()  # nur RSET wenn Mail nicht gesendet
+            except Exception:
+                pass
+        else:
+            # Mail erfolgreich gesendet → löschen
+            try:
+                pop_conn.dele(i)
+                print(f"[OK] Mail {i} weitergeleitet & gelöscht")
+            except Exception as e:
+                print(f"[WARN] Mail {i} konnte nicht gelöscht werden: {e}")
 
     except Exception as e:
         print(f"[FEHLER] Mail {i}: {e}")
