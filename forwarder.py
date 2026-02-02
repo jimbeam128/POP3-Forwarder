@@ -112,7 +112,11 @@ else:
 # ======================
 if not had_fatal_error and pop_logged_in:
     resp, uidl_list, _ = pop_conn.uidl()
-    uidls = {int(e.decode().split()[0]): e.decode().split()[1] for e in uidl_list}
+    uidls = {
+        int(parts[0]): parts[1]
+        for e in uidl_list
+        if (parts := e.decode(errors="replace").split()) and len(parts) == 2
+    }
     print(f"{len(uidls)} Mails im Quellpostfach gefunden.")
 
     smtp = smtplib.SMTP(SMTP_HOST, SMTP_PORT)
