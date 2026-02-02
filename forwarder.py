@@ -177,7 +177,8 @@ if not had_fatal_error and pop_logged_in:
 
             forward = EmailMessage()
             forward['Subject'] = original_subject
-            forward['From'] = f"{sender_name} <{header_safe(SMTP_FROM)}>"
+            safe_sender_name = sender_name.replace('"', '').strip()
+            forward['From'] = f"\"{safe_sender_name}\" <{header_safe(SMTP_FROM)}>"
             forward['To'] = TARGET_EMAIL
             forward['Reply-To'] = header_safe(original_from)
             forward['X-Original-From'] = header_safe(original_from)
