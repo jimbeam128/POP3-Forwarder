@@ -186,7 +186,7 @@ for i in sorted(uidls.keys()):
         print(f"[OK] Mail {i} erfolgreich weitergeleitet")
 
     except Exception as e:
-        print(f"[FEHLER] Mail {i} beim Weiterleiten: {e}")
+        print(f"[FEHLER] Mail {i} beim Weiterleiten: {e} {subject}")
         try:
             pop_conn.rset()
         except Exception:
