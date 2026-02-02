@@ -25,6 +25,20 @@ def decode_and_safe(header_value):
         print(f"[DEBUG] Subject decode error: {e}")
         return "(invalid subject)"
 
+def get_text_from_part(part):
+    """Return safe string from email part, never None"""
+    try:
+        payload = part.get_payload(decode=True)
+        if payload is None:
+            return ""
+        charset = part.get_content_charset() or part.get_charset() or "utf-8"
+        if isinstance(payload, bytes):
+            return payload.decode(charset, errors="replace")
+        return str(payload)
+    except Exception as e:
+        print(f"[DEBUG] payload decode failed: {e}")
+        return ""
+
 # ======================
 # POP3 Konfiguration
 # ======================
@@ -66,9 +80,7 @@ for attempt in range(POP3_RETRIES):
         break
     except Exception as e:
         print(f"[WARN] POP3 Login fehlgeschlagen ({attempt+1}): {e}")
-        pop_conn = None
         time.sleep(5)
-
 if not pop_conn:
     raise RuntimeError("POP3 Login endgültig fehlgeschlagen")
 
@@ -77,18 +89,17 @@ if not pop_conn:
 # ======================
 resp, uidl_list, _ = pop_conn.uidl()
 uidls = {int(e.decode().split()[0]): e.decode().split()[1] for e in uidl_list}
-
 print(f"{len(uidls)} Mails im Quellpostfach gefunden.")
 
 # ======================
-# SMTP Setup
+# SMTP Login
 # ======================
 smtp = smtplib.SMTP(SMTP_HOST, SMTP_PORT)
 smtp.starttls()
 smtp.login(SMTP_USER, SMTP_PASS)
 
 # ======================
-# Mail Verarbeitung
+# Mail-Verarbeitung
 # ======================
 for i in sorted(uidls.keys()):
     print(f"\n[DEBUG] === Mail {i} ===")
@@ -102,13 +113,11 @@ for i in sorted(uidls.keys()):
         return_path = email_msg.get('Return-Path', '')
         _, return_addr = parseaddr(return_path)
         original_from = reply_addr or from_addr or return_addr or "unknown@example.com"
-
         sender_name = (
             header_safe(from_name)
             or header_safe(reply_name)
             or original_from.split("@")[0]
         )
-
         subject = decode_and_safe(email_msg.get('Subject'))
 
         forward = EmailMessage()
@@ -120,43 +129,26 @@ for i in sorted(uidls.keys()):
         # ======================
         # BODY HANDLING
         # ======================
-        def get_text_from_part(part):
-            payload = part.get_payload(decode=True)
-            charset = part.get_content_charset() or part.get_charset() or "utf-8"
-            if payload is None:
-                return ""
-            if isinstance(payload, bytes):
-                try:
-                    return payload.decode(charset, errors="replace")
-                except Exception as e:
-                    print(f"[DEBUG] decode error: {e}")
-                    return ""
-            return str(payload)
-
         if email_msg.is_multipart():
             print("[DEBUG] multipart detected")
             for part in email_msg.walk():
-                if part.is_multipart():
-                    continue  # skip container
+                if part.is_multipart():  # Container überspringen
+                    continue
                 ctype = part.get_content_type()
                 text = get_text_from_part(part)
                 print(f"[DEBUG] usable part: {ctype}, length={len(text)}")
-
                 if not text.strip():
                     continue
-
                 if ctype == "text/plain":
-                    forward.set_content(text)
-                elif ctype == "text/html":
                     if not forward.get_content():
-                        forward.set_content("HTML-Mail (Text nicht verfügbar)")
+                        forward.set_content(text)
+                elif ctype == "text/html":
                     forward.add_alternative(text, subtype="html")
         else:
             print("[DEBUG] singlepart detected")
             ctype = email_msg.get_content_type()
             text = get_text_from_part(email_msg)
             print(f"[DEBUG] singlepart content type: {ctype}, length={len(text)}")
-
             if ctype == "text/plain":
                 forward.set_content(text)
             elif ctype == "text/html":
@@ -165,6 +157,9 @@ for i in sorted(uidls.keys()):
             else:
                 forward.set_content(text)
 
+        # ======================
+        # Mail senden & löschen
+        # ======================
         smtp.send_message(forward)
         pop_conn.dele(i)
         print(f"[OK] Mail {i} weitergeleitet & gelöscht")
