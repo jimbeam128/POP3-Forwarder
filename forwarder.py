@@ -105,41 +105,30 @@ if not pop_logged_in:
         raise RuntimeError("Maximale Anzahl aufeinanderfolgender Fehler erreicht")
         exit(0)
 else:
-    # Verbindung erfolgreich, Counter zurücksetzen
     write_failures(0)
 
 # ======================
-# Wenn fatal error -> Script beendet, kein Zugriff auf pop_conn
+# Verarbeitung
 # ======================
 if not had_fatal_error and pop_logged_in:
-    # ======================
-    # UIDLs abrufen
-    # ======================
     resp, uidl_list, _ = pop_conn.uidl()
-    uidls = {int(entry.decode().split()[0]): entry.decode().split()[1] for entry in uidl_list}
-    num_messages = len(uidls)
-    print(f"{num_messages} Mails im Quellpostfach gefunden.")
+    uidls = {int(e.decode().split()[0]): e.decode().split()[1] for e in uidl_list}
+    print(f"{len(uidls)} Mails im Quellpostfach gefunden.")
 
-    # ======================
-    # SMTP Verbindung
-    # ======================
     smtp = smtplib.SMTP(SMTP_HOST, SMTP_PORT)
     smtp.starttls()
     smtp.login(SMTP_USER, SMTP_PASS)
 
-    # ======================
-    # Weiterleitung
-    # ======================
     for i in sorted(uidls.keys()):
         uid = uidls[i]
-
         if uid in processed_uidls:
             print(f"[SKIP] Mail {i} (UIDL bereits verarbeitet)")
             continue
 
         try:
-            resp, lines, octets = pop_conn.retr(i)
+            _, lines, _ = pop_conn.retr(i)
             msg_content = b"\r\n".join(lines)
+
             from email import policy
             from email.parser import BytesParser
             email_msg = BytesParser(policy=policy.default).parsebytes(msg_content)
@@ -147,91 +136,69 @@ if not had_fatal_error and pop_logged_in:
             from email.utils import parseaddr
             from_name, from_addr = parseaddr(str(email_msg.get('From', '')))
             reply_name, reply_addr = parseaddr(str(email_msg.get('Reply-To', '')))
+            _, return_addr = parseaddr(email_msg.get('Return-Path', ''))
 
-            # ---- Absender robust bestimmen ----
-            return_path = email_msg.get('Return-Path', '')
-            _, return_addr = parseaddr(return_path)
+            original_from = reply_addr or from_addr or return_addr or "unknown@example.com"
 
-            from_name, from_addr = parseaddr(str(email_msg.get('From', '')))
-            reply_name, reply_addr = parseaddr(str(email_msg.get('Reply-To', '')))
-
-            # Antwort-Adresse (Priorität!)
-            original_from = (
-                reply_addr
-                or from_addr
-                or return_addr
-                or "unknown@example.com"
-            )
-
-            # Anzeigename
             if from_name:
                 sender_name = header_safe(from_name)
             elif reply_name:
                 sender_name = header_safe(reply_name)
-            elif original_from and "@" in original_from:
+            elif "@" in original_from:
                 sender_name = original_from.split("@")[0]
             else:
                 sender_name = "Mail Sender"
 
-            original_subject = decode_and_safe(email_msg['Subject'])
-
             forward = EmailMessage()
-            forward['Subject'] = original_subject
-            safe_sender_name = sender_name.replace('"', '').strip()
-            forward['From'] = f"\"{safe_sender_name}\" <{header_safe(SMTP_FROM)}>"
+            forward['Subject'] = decode_and_safe(email_msg['Subject'])
+            forward['From'] = f"\"{sender_name.replace('"','').strip()}\" <{SMTP_FROM}>"
             forward['To'] = TARGET_EMAIL
-            forward['Reply-To'] = header_safe(original_from)
-            forward['X-Original-From'] = header_safe(original_from)
+            forward['Reply-To'] = original_from
+            forward['X-Original-From'] = original_from
             forward['X-Forwarded-By'] = SMTP_FROM_NAME
 
             if email_msg.is_multipart():
                 for part in email_msg.walk():
-                    ctype = part.get_content_type()
-                    cdisp = str(part.get('Content-Disposition'))
                     payload = part.get_payload(decode=True)
-                    charset = part.get_content_charset() or 'utf-8'
-
                     if payload is None:
                         continue
 
-                    if ctype == 'text/plain' and 'attachment' not in cdisp:
-                        forward.set_content(payload.decode(charset, errors='replace'))
-                    elif ctype == 'text/html' and 'attachment' not in cdisp:
+                    ctype = part.get_content_type()
+                    cdisp = str(part.get('Content-Disposition'))
+                    charset = part.get_content_charset() or "utf-8"
+
+                    if ctype == "text/plain" and "attachment" not in cdisp:
+                        forward.set_content(payload.decode(charset, errors="replace"))
+                    elif ctype == "text/html" and "attachment" not in cdisp:
                         if not forward.get_content():
-                            forward.set_content("Diese Nachricht enthält HTML-Inhalt.")
+                            forward.set_content("HTML-Mail (Text nicht verfügbar)")
                         forward.add_alternative(
-                            payload.decode(charset, errors='replace'),
-                            subtype='html'
+                            payload.decode(charset, errors="replace"),
+                            subtype="html"
                         )
-                    elif 'attachment' in cdisp:
+                    elif "attachment" in cdisp:
                         filename = part.get_filename()
                         if filename:
-                            filename = decode_and_safe(filename)
                             forward.add_attachment(
                                 payload,
                                 maintype=part.get_content_maintype(),
                                 subtype=part.get_content_subtype(),
-                                filename=filename
+                                filename=decode_and_safe(filename)
                             )
             else:
                 payload = email_msg.get_payload(decode=True)
-                charset = email_msg.get_content_charset() or 'utf-8'
-                if payload:
-                    # Prüfen, ob es HTML ist
-                    content_type = email_msg.get_content_type()
-                    if content_type == "text/html":
-                        # Multipart/alternative mit Plaintext-Fallback
-                        forward.set_content("HTML-Mail (Text nicht verfügbar)")  # einfacher Plaintext-Fallback
-                        forward.add_alternative(payload.decode(charset, errors="replace"), subtype="html")
+                if payload is not None:
+                    charset = email_msg.get_content_charset() or "utf-8"
+                    if email_msg.get_content_type() == "text/html":
+                        forward.set_content("HTML-Mail (Text nicht verfügbar)")
+                        forward.add_alternative(
+                            payload.decode(charset, errors="replace"),
+                            subtype="html"
+                        )
                     else:
                         forward.set_content(payload.decode(charset, errors="replace"))
 
-            smtp.send_message(
-                forward,
-                from_addr=SMTP_FROM,
-                to_addrs=[TARGET_EMAIL]
-            )
-
+            smtp.send_message(forward, from_addr=SMTP_FROM, to_addrs=[TARGET_EMAIL])
             pop_conn.dele(i)
 
             processed_uidls.add(uid)
@@ -241,15 +208,12 @@ if not had_fatal_error and pop_logged_in:
             print(f"[OK] Mail {i} weitergeleitet.")
 
         except Exception as e:
-            print(f"[FEHLER] Mail {i}: {e} - {original_subject}")
+            print(f"[FEHLER] Mail {i}: {e}")
             try:
                 pop_conn.rset()
             except Exception:
                 pass
 
-    # ======================
-    # Cleanup
-    # ======================
     pop_conn.quit()
     smtp.quit()
 
