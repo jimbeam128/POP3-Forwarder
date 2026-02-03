@@ -82,7 +82,9 @@ for attempt in range(POP3_RETRIES):
         print(f"[WARN] POP3 Login fehlgeschlagen ({attempt+1}): {e}")
         time.sleep(5)
 if not pop_conn:
-    raise RuntimeError("POP3 Login endgültig fehlgeschlagen")
+    #raise RuntimeError("POP3 Login endgültig fehlgeschlagen")
+    print(f"[WARN] POP3 Login endgültig fehlgeschlagen")
+    sys.exit(0)
 
 # ======================
 # UIDLs abrufen
