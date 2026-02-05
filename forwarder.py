@@ -94,6 +94,11 @@ resp, uidl_list, _ = pop_conn.uidl()
 uidls = {int(e.decode().split()[0]): e.decode().split()[1] for e in uidl_list}
 print(f"{len(uidls)} Mails im Quellpostfach gefunden.")
 
+if not uidls:
+    print("Keine Mails vorhanden – SMTP wird nicht aufgebaut.")
+    pop_conn.quit()
+    exit(0)
+
 # ======================
 # SMTP Login
 # ======================
