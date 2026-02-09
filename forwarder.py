@@ -111,6 +111,7 @@ smtp.login(SMTP_USER, SMTP_PASS)
 # ======================
 for i in sorted(uidls.keys()):
     print(f"\n[DEBUG] === Mail {i} ===")
+    subject = "(unknown subject)"
     try:
         resp, lines, _ = pop_conn.retr(i)
         raw = b"\r\n".join(lines)
