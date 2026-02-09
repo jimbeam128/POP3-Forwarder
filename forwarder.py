@@ -218,7 +218,7 @@ for i in sorted(uidls.keys()):
         print(f"[OK] Mail {i} weitergeleitet & gelöscht")
 
     except Exception as e:
-        print(f"[FEHLER] Mail {i}: {e}")
+        print(f"[FEHLER] Mail {i} | Subject: {subject} | Error: {e}")
         try:
             pop_conn.rset()
         except Exception:
