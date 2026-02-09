@@ -167,6 +167,15 @@ for i in sorted(uidls.keys()):
                             body_set = True
                         forward.add_alternative(text, subtype="html")
 
+                        def rfc_safe_lines(text, maxlen=900):
+                            return "\r\n".join(
+                                text[i:i+maxlen] for i in range(0, len(text), maxlen)
+                            )
+                        safe_html = rfc_safe_lines(text)
+                        forward.add_alternative(safe_html, subtype="html")
+
+
+
                 # ATTACHMENTS
                 elif disposition == "attachment":
                     payload = part.get_payload(decode=True)
@@ -191,6 +200,13 @@ for i in sorted(uidls.keys()):
             elif ctype == "text/html":
                 forward.set_content("Diese E-Mail enthält HTML-Inhalt.")
                 forward.add_alternative(text, subtype="html")
+                def rfc_safe_lines(text, maxlen=900):
+                    return "\r\n".join(
+                        text[i:i+maxlen] for i in range(0, len(text), maxlen)
+                    )
+                safe_html = rfc_safe_lines(text)
+                forward.add_alternative(safe_html, subtype="html")
+            
             else:
                 forward.set_content(text or "")
 
