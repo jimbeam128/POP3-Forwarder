@@ -82,9 +82,9 @@ for attempt in range(POP3_RETRIES):
     except Exception as e:
         print(f"[WARN] POP3 Login fehlgeschlagen ({attempt+1}): {e}")
         time.sleep(5)
+
 if not pop_conn:
-    #raise RuntimeError("POP3 Login endgültig fehlgeschlagen")
-    print(f"[WARN] POP3 Login endgültig fehlgeschlagen")
+    print("[WARN] POP3 Login endgültig fehlgeschlagen")
     sys.exit(0)
 
 # ======================
@@ -97,7 +97,7 @@ print(f"{len(uidls)} Mails im Quellpostfach gefunden.")
 if not uidls:
     print("Keine Mails vorhanden – SMTP wird nicht aufgebaut.")
     pop_conn.quit()
-    exit(0)
+    sys.exit(0)
 
 # ======================
 # SMTP Login
@@ -112,6 +112,7 @@ smtp.login(SMTP_USER, SMTP_PASS)
 for i in sorted(uidls.keys()):
     print(f"\n[DEBUG] === Mail {i} ===")
     subject = "(unknown subject)"
+
     try:
         resp, lines, _ = pop_conn.retr(i)
         raw = b"\r\n".join(lines)
@@ -138,9 +139,11 @@ for i in sorted(uidls.keys()):
         forward['Reply-To'] = original_from
 
         # ======================
-        # BODY HANDLING (FIX für Python 3.14)
+        # BODY HANDLING (minimaler DHL-Fix)
         # ======================
         body_set = False
+        text_body = None
+        html_body = None
 
         if email_msg.is_multipart():
             print("[DEBUG] multipart detected")
@@ -155,29 +158,16 @@ for i in sorted(uidls.keys()):
 
                 print(f"[DEBUG] usable part: {ctype}, length={len(text)}")
 
-                # TEXT
                 if disposition is None:
                     if ctype == "text/plain" and text.strip():
+                        text_body = text
                         if not body_set:
-                            forward.set_content(text)
+                            forward.set_content(text_body)
                             body_set = True
 
                     elif ctype == "text/html" and text.strip():
-                        if not body_set:
-                            forward.set_content("Diese E-Mail enthält HTML-Inhalt.")
-                            body_set = True
-                        forward.add_alternative(text, subtype="html")
+                        html_body = text
 
-                        def rfc_safe_lines(text, maxlen=900):
-                            return "\r\n".join(
-                                text[i:i+maxlen] for i in range(0, len(text), maxlen)
-                            )
-                        safe_html = rfc_safe_lines(text)
-                        forward.add_alternative(safe_html, subtype="html")
-
-
-
-                # ATTACHMENTS
                 elif disposition == "attachment":
                     payload = part.get_payload(decode=True)
                     filename = part.get_filename()
@@ -192,24 +182,31 @@ for i in sorted(uidls.keys()):
 
         else:
             print("[DEBUG] singlepart detected")
-
             ctype = email_msg.get_content_type()
             text = get_text_from_part(email_msg)
 
             if ctype == "text/plain":
-                forward.set_content(text or "")
+                text_body = text or ""
+                forward.set_content(text_body)
+                body_set = True
             elif ctype == "text/html":
-                forward.set_content("Diese E-Mail enthält HTML-Inhalt.")
-                forward.add_alternative(text, subtype="html")
-                def rfc_safe_lines(text, maxlen=900):
-                    return "\r\n".join(
-                        text[i:i+maxlen] for i in range(0, len(text), maxlen)
-                    )
-                safe_html = rfc_safe_lines(text)
-                forward.add_alternative(safe_html, subtype="html")
-            
-            else:
-                forward.set_content(text or "")
+                html_body = text
+
+        # 🔥 DHL / HTML-only Fix
+        if html_body and not text_body:
+            text_body = (
+                "Diese E-Mail enthält HTML-Inhalte.\n\n"
+                "Bitte öffnen Sie diese Nachricht in einem HTML-fähigen E-Mail-Client."
+            )
+            if not body_set:
+                forward.set_content(text_body)
+                body_set = True
+
+        if html_body:
+            def rfc_safe_lines(text, maxlen=900):
+                return "\r\n".join(text[i:i+maxlen] for i in range(0, len(text), maxlen))
+            safe_html = rfc_safe_lines(html_body)
+            forward.add_alternative(safe_html, subtype="html")
 
         # ======================
         # Mail senden & löschen
@@ -221,7 +218,6 @@ for i in sorted(uidls.keys()):
     except Exception as e:
         safe_subject = subject if subject else "(no subject)"
         print(f"[FEHLER] Mail {i} | Subject: {safe_subject} | Error: {e}")
-
         try:
             pop_conn.rset()
         except Exception:
