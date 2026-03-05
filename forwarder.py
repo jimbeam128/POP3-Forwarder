@@ -131,14 +131,7 @@ for i in sorted(uidls.keys()):
         # ======================
         # BULLETPROOF RAW FORWARD
         # ======================
-        forward_headers = (
-            f'From: "{sender_name}" <{SMTP_FROM}>\r\n'
-            f'To: {TARGET_EMAIL}\r\n'
-            f'Subject: {subject}\r\n'
-            f'Reply-To: {original_from}\r\n'
-        )
-
-        forward_raw = forward_headers.encode("utf-8") + raw
+        forward_raw = raw
 
         smtp.sendmail(
             SMTP_FROM,
