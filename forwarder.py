@@ -131,12 +131,18 @@ for i in sorted(uidls.keys()):
         # ======================
         # BULLETPROOF RAW FORWARD
         # ======================
-        forward_raw = raw
+        from email.generator import BytesGenerator
+        from io import BytesIO
+
+        buf = BytesIO()
+        BytesGenerator(buf, policy=policy.default).flatten(email_msg)
+
+        safe_raw = buf.getvalue()
 
         smtp.sendmail(
             SMTP_FROM,
             TARGET_EMAIL,
-            forward_raw
+            safe_raw
         )
 
         # löschen nach Erfolg
