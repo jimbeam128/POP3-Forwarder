@@ -115,64 +115,52 @@ smtp.login(SMTP_USER, SMTP_PASS)
 # ======================
 for i in sorted(uidls.keys()):
     print(f"\n[DEBUG] === Mail {i} ===")
+
     subject = "(unknown subject)"
 
     try:
-        # RAW Mail holen
-        resp, lines, _ = pop_conn.retr(i)
-        raw = b"\r\n".join(lines)
+        # ======================
+        # 1. HEADER ONLY FETCH (KEIN RETR!)
+        # ======================
+        resp, lines, _ = pop_conn.top(i, 0)
+        raw_header = b"\r\n".join(lines)
 
-        # Header parsen
-        email_msg = BytesParser(policy=policy.default).parsebytes(raw)
+        email_msg = BytesParser(policy=policy.default).parsebytes(raw_header)
 
         subject = decode_and_safe(email_msg.get('Subject'))
         subject_lower = subject.lower()
 
         # ======================
-        # FILTER CHECK
+        # FILTER BEFORE RETR
         # ======================
         if any(word in subject_lower for word in FILTER_WORDS):
-            print(f"[FILTERED] Mail {i} gelöscht (Subject Match: {subject})")
+            print(f"[FILTERED] Mail {i} gelöscht (Header match)")
 
             pop_conn.dele(i)
             continue
 
-        from_name, from_addr = parseaddr(str(email_msg.get('From', '')))
-        reply_name, reply_addr = parseaddr(str(email_msg.get('Reply-To', '')))
-        return_path = email_msg.get('Return-Path', '')
-        _, return_addr = parseaddr(return_path)
+        # ======================
+        # 2. NOW SAFE RETR
+        # ======================
+        resp, lines, _ = pop_conn.retr(i)
+        raw = b"\r\n".join(lines)
 
-        original_from = (
-            reply_addr
-            or from_addr
-            or return_addr
-            or "unknown@example.com"
-        )
-
-        sender_name = (
-            header_safe(from_name)
-            or header_safe(reply_name)
-            or original_from.split("@")[0]
-        )
+        email_msg = BytesParser(policy=policy.default).parsebytes(raw)
 
         # ======================
-        # BULLETPROOF RAW FORWARD
+        # SEND
         # ======================
-        forward_raw = raw
-
-        smtp.sendmail(
-            SMTP_FROM,
-            TARGET_EMAIL,
-            forward_raw
+        smtp.send_message(
+            email_msg,
+            from_addr=SMTP_FROM,
+            to_addrs=TARGET_EMAIL
         )
 
-        # löschen nach Erfolg
         pop_conn.dele(i)
-        print(f"[OK] Mail {i} weitergeleitet & gelöscht")
+        print(f"[OK] Mail {i} forwarded & deleted")
 
     except Exception as e:
-        safe_subject = subject if subject else "(no subject)"
-        print(f"[FEHLER] Mail {i} | Subject: {safe_subject} | Error: {e}")
+        print(f"[FEHLER] Mail {i} | Subject: {subject} | Error: {e}")
 
         try:
             pop_conn.rset()
