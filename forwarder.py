@@ -9,6 +9,18 @@ from email import policy
 from email.parser import BytesParser
 
 # ======================
+# FILTER KONFIG
+# ======================
+FILTER_WORDS = [
+    "pervert",
+    "trojan",
+    "crypto",
+    "urgent",
+    "masturbating",
+    "recorded",
+]
+
+# ======================
 # Helper Funktionen
 # ======================
 def header_safe(value):
@@ -51,9 +63,11 @@ TARGET_EMAIL = os.environ['TARGET_EMAIL']
 # ======================
 UIDL_FILE = "processed_uidls.txt"
 processed_uidls = set()
+
 if os.path.exists(UIDL_FILE):
     with open(UIDL_FILE, "r") as f:
         processed_uidls = set(line.strip() for line in f if line.strip())
+
 
 # ======================
 # POP3 Login
@@ -70,8 +84,9 @@ for attempt in range(POP3_RETRIES):
         time.sleep(5)
 
 if not pop_conn:
-    print(f"[WARN] POP3 Login endgültig fehlgeschlagen")
+    print("[WARN] POP3 Login endgültig fehlgeschlagen")
     sys.exit(0)
+
 
 # ======================
 # UIDLs abrufen
@@ -86,12 +101,14 @@ if not uidls:
     pop_conn.quit()
     sys.exit(0)
 
+
 # ======================
 # SMTP Login
 # ======================
 smtp = smtplib.SMTP(SMTP_HOST, SMTP_PORT)
 smtp.starttls()
 smtp.login(SMTP_USER, SMTP_PASS)
+
 
 # ======================
 # Mail-Verarbeitung
@@ -105,10 +122,20 @@ for i in sorted(uidls.keys()):
         resp, lines, _ = pop_conn.retr(i)
         raw = b"\r\n".join(lines)
 
-        # Nur Header parsen (kein Rebuild!)
+        # Header parsen
         email_msg = BytesParser(policy=policy.default).parsebytes(raw)
 
         subject = decode_and_safe(email_msg.get('Subject'))
+        subject_lower = subject.lower()
+
+        # ======================
+        # FILTER CHECK
+        # ======================
+        if any(word in subject_lower for word in FILTER_WORDS):
+            print(f"[FILTERED] Mail {i} gelöscht (Subject Match: {subject})")
+
+            pop_conn.dele(i)
+            continue
 
         from_name, from_addr = parseaddr(str(email_msg.get('From', '')))
         reply_name, reply_addr = parseaddr(str(email_msg.get('Reply-To', '')))
@@ -151,6 +178,7 @@ for i in sorted(uidls.keys()):
             pop_conn.rset()
         except Exception:
             pass
+
 
 # ======================
 # Cleanup
