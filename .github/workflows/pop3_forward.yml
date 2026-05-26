@@ -1,6 +1,10 @@
 name: POP3-Forwarder
 on:
   workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  
 jobs:
   forward:
     runs-on: ubuntu-latest
