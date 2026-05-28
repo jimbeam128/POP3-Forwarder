@@ -24,7 +24,7 @@ FILTER_WORDS = [
 
 
 # ======================
-# Helper Funktionen
+# HELPER
 # ======================
 def header_safe(value):
     if not value:
@@ -35,16 +35,34 @@ def header_safe(value):
 def decode_and_safe(header_value):
     if not header_value:
         return "(no subject)"
-
     try:
         return header_safe(str(make_header(decode_header(header_value))))
-    except Exception as e:
-        print(f"[DEBUG] Subject decode error: {e}")
+    except:
         return "(invalid subject)"
 
 
 # ======================
-# POP3 KONFIG
+# RFC FIX: LINE WRAPPING
+# ======================
+def fix_long_lines(raw_bytes):
+    """
+    Ensures SMTP-safe line length (RFC 5322 max 998 chars per line)
+    without changing content meaningfully.
+    """
+    lines = raw_bytes.split(b"\r\n")
+    fixed = []
+
+    for line in lines:
+        while len(line) > 998:
+            fixed.append(line[:998])
+            line = line[998:]
+        fixed.append(line)
+
+    return b"\r\n".join(fixed)
+
+
+# ======================
+# POP3 CONFIG
 # ======================
 POP3_HOST = os.environ['POP3_HOST']
 POP3_USER = os.environ['POP3_USER']
@@ -55,7 +73,7 @@ POP3_RETRIES = 3
 
 
 # ======================
-# SMTP KONFIG
+# SMTP CONFIG
 # ======================
 SMTP_HOST = os.environ['SMTP_HOST']
 SMTP_PORT = int(os.environ.get('SMTP_PORT', 587))
@@ -67,7 +85,7 @@ TARGET_EMAIL = os.environ['TARGET_EMAIL']
 
 
 # ======================
-# POP3 LOGIN
+# LOGIN POP3
 # ======================
 pop_conn = None
 
@@ -82,12 +100,11 @@ for attempt in range(POP3_RETRIES):
         time.sleep(5)
 
 if not pop_conn:
-    print("[WARN] POP3 Login endgültig fehlgeschlagen")
     sys.exit(0)
 
 
 # ======================
-# UIDLs
+# UIDL
 # ======================
 resp, uidl_list, _ = pop_conn.uidl()
 
@@ -97,11 +114,6 @@ uidls = {
 }
 
 print(f"{len(uidls)} Mails gefunden.")
-
-
-if not uidls:
-    pop_conn.quit()
-    sys.exit(0)
 
 
 # ======================
@@ -124,73 +136,70 @@ for i in sorted(uidls.keys()):
     try:
 
         # ======================
-        # HEADER ONLY (FILTER)
+        # HEADER FILTER
         # ======================
         resp, lines, _ = pop_conn.top(i, 0)
         raw_header = b"\r\n".join(lines)
 
-        header_msg = BytesParser(
-            policy=policy.default
-        ).parsebytes(raw_header)
+        header_msg = BytesParser(policy=policy.default).parsebytes(raw_header)
 
-        subject = decode_and_safe(header_msg.get('Subject'))
+        subject = decode_and_safe(header_msg.get("Subject"))
         subject_lower = subject.lower()
 
-        if any(word in subject_lower for word in FILTER_WORDS):
-            print(f"[FILTERED] Mail {i} gelöscht: {subject}")
+        if any(w in subject_lower for w in FILTER_WORDS):
+            print(f"[FILTERED] Mail {i}")
             pop_conn.dele(i)
             continue
 
 
         # ======================
-        # FULL MAIL FETCH
+        # FULL MAIL
         # ======================
         resp, lines, _ = pop_conn.retr(i)
         raw = b"\r\n".join(lines)
 
 
         # ======================
-        # ORIGINAL HEADER ANALYSE (nur für Reply-To)
+        # REPLY-TO INJECTION
         # ======================
-        email_msg = BytesParser(
-            policy=policy.default
-        ).parsebytes(raw)
+        email_msg = BytesParser(policy=policy.default).parsebytes(raw)
 
-        from_addr = email_msg.get("From", "")
-        reply_to = email_msg.get("Reply-To", "")
-        return_path = email_msg.get("Return-Path", "")
+        reply_to = (
+            email_msg.get("Reply-To")
+            or email_msg.get("From")
+            or email_msg.get("Return-Path")
+            or ""
+        )
 
-        original_reply = reply_to or from_addr or return_path
-
-
-        # ======================
-        # RAW STRING MANIPULATION (Reply-To INJECTION)
-        # ======================
         try:
             raw_str = raw.decode("utf-8", errors="ignore")
 
-            # bestehenden Reply-To entfernen (falls vorhanden)
             raw_str = re.sub(
                 r"(?im)^Reply-To:.*\r?\n",
                 "",
                 raw_str
             )
 
-            # Header-Injection
             raw_str = raw_str.replace(
                 "\r\n\r\n",
-                f"\r\nReply-To: {original_reply}\r\n\r\n",
+                f"\r\nReply-To: {reply_to}\r\n\r\n",
                 1
             )
 
             raw = raw_str.encode("utf-8", errors="ignore")
 
         except Exception as e:
-            print(f"[WARN] Reply-To Injection failed: {e}")
+            print(f"[WARN] Reply-To injection failed: {e}")
 
 
         # ======================
-        # RAW FORWARD (UNCHANGED STRUCTURE)
+        # 🔥 CRITICAL FIX HERE
+        # ======================
+        raw = fix_long_lines(raw)
+
+
+        # ======================
+        # SEND RAW MAIL
         # ======================
         smtp.sendmail(
             SMTP_USER,
@@ -199,15 +208,10 @@ for i in sorted(uidls.keys()):
         )
 
 
-        # ======================
-        # DELETE AFTER SUCCESS
-        # ======================
         pop_conn.dele(i)
-
         print(f"[OK] Mail {i} forwarded")
 
     except Exception as e:
-
         print(f"[FEHLER] Mail {i} | {subject} | {e}")
 
         try:
@@ -227,9 +231,6 @@ except:
 try:
     pop_conn.quit()
 except:
-    try:
-        pop_conn.close()
-    except:
-        pass
+    pass
 
 print("\nFertig.")
