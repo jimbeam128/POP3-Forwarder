@@ -3,92 +3,62 @@ import sys
 import poplib
 import smtplib
 import time
-import re
-
 from email.header import decode_header, make_header
-from email.parser import BytesParser
+from email.utils import parseaddr
 from email import policy
-
-
-# ======================
-# FILTER KONFIG
-# ======================
-FILTER_WORDS = [
-    "pervert",
-    "trojan",
-    "crypto",
-    "urgent",
-    "masturbating",
-    "recorded",
-]
-
+from email.parser import BytesParser
 
 # ======================
-# HELPER
+# Helper Funktionen
 # ======================
 def header_safe(value):
     if not value:
         return ""
     return " ".join(str(value).split())
 
-
 def decode_and_safe(header_value):
     if not header_value:
         return "(no subject)"
     try:
         return header_safe(str(make_header(decode_header(header_value))))
-    except:
+    except Exception as e:
+        print(f"[DEBUG] Subject decode error: {e}")
         return "(invalid subject)"
 
 
 # ======================
-# RFC FIX: LINE WRAPPING
-# ======================
-def fix_long_lines(raw_bytes):
-    """
-    Ensures SMTP-safe line length (RFC 5322 max 998 chars per line)
-    without changing content meaningfully.
-    """
-    lines = raw_bytes.split(b"\r\n")
-    fixed = []
-
-    for line in lines:
-        while len(line) > 998:
-            fixed.append(line[:998])
-            line = line[998:]
-        fixed.append(line)
-
-    return b"\r\n".join(fixed)
-
-
-# ======================
-# POP3 CONFIG
+# POP3 Konfiguration
 # ======================
 POP3_HOST = os.environ['POP3_HOST']
 POP3_USER = os.environ['POP3_USER']
 POP3_PASS = os.environ['POP3_PASS']
-
 POP3_TIMEOUT = 30
 POP3_RETRIES = 3
 
-
 # ======================
-# SMTP CONFIG
+# SMTP Konfiguration
 # ======================
 SMTP_HOST = os.environ['SMTP_HOST']
 SMTP_PORT = int(os.environ.get('SMTP_PORT', 587))
-
 SMTP_USER = os.environ['SMTP_USER']
 SMTP_PASS = os.environ['SMTP_PASS']
-
+SMTP_FROM = os.environ['SMTP_FROM']
+SMTP_FROM_NAME = "POP3 Forwarder"
 TARGET_EMAIL = os.environ['TARGET_EMAIL']
 
+# ======================
+# UIDL Schutz
+# ======================
+UIDL_FILE = "processed_uidls.txt"
+processed_uidls = set()
+if os.path.exists(UIDL_FILE):
+    with open(UIDL_FILE, "r") as f:
+        processed_uidls = set(line.strip() for line in f if line.strip())
 
 # ======================
-# LOGIN POP3
+# POP3 Login
 # ======================
 pop_conn = None
-
 for attempt in range(POP3_RETRIES):
     try:
         pop_conn = poplib.POP3_SSL(POP3_HOST, timeout=POP3_TIMEOUT)
@@ -100,137 +70,92 @@ for attempt in range(POP3_RETRIES):
         time.sleep(5)
 
 if not pop_conn:
+    print(f"[WARN] POP3 Login endgültig fehlgeschlagen")
     sys.exit(0)
 
-
 # ======================
-# UIDL
+# UIDLs abrufen
 # ======================
 resp, uidl_list, _ = pop_conn.uidl()
+uidls = {int(e.decode().split()[0]): e.decode().split()[1] for e in uidl_list}
 
-uidls = {
-    int(e.decode().split()[0]): e.decode().split()[1]
-    for e in uidl_list
-}
+print(f"{len(uidls)} Mails im Quellpostfach gefunden.")
 
-print(f"{len(uidls)} Mails gefunden.")
-
+if not uidls:
+    print("Keine Mails vorhanden – SMTP wird nicht aufgebaut.")
+    pop_conn.quit()
+    sys.exit(0)
 
 # ======================
-# SMTP LOGIN
+# SMTP Login
 # ======================
 smtp = smtplib.SMTP(SMTP_HOST, SMTP_PORT)
 smtp.starttls()
 smtp.login(SMTP_USER, SMTP_PASS)
 
-
 # ======================
-# MAIL LOOP
+# Mail-Verarbeitung
 # ======================
 for i in sorted(uidls.keys()):
-
-    print(f"\n[DEBUG] Mail {i}")
-
+    print(f"\n[DEBUG] === Mail {i} ===")
     subject = "(unknown subject)"
 
     try:
-
-        # ======================
-        # HEADER FILTER
-        # ======================
-        resp, lines, _ = pop_conn.top(i, 0)
-        raw_header = b"\r\n".join(lines)
-
-        header_msg = BytesParser(policy=policy.default).parsebytes(raw_header)
-
-        subject = decode_and_safe(header_msg.get("Subject"))
-        subject_lower = subject.lower()
-
-        if any(w in subject_lower for w in FILTER_WORDS):
-            print(f"[FILTERED] Mail {i}")
-            pop_conn.dele(i)
-            continue
-
-
-        # ======================
-        # FULL MAIL
-        # ======================
+        # RAW Mail holen
         resp, lines, _ = pop_conn.retr(i)
         raw = b"\r\n".join(lines)
 
-
-        # ======================
-        # REPLY-TO INJECTION
-        # ======================
+        # Nur Header parsen (kein Rebuild!)
         email_msg = BytesParser(policy=policy.default).parsebytes(raw)
 
-        reply_to = (
-            email_msg.get("Reply-To")
-            or email_msg.get("From")
-            or email_msg.get("Return-Path")
-            or ""
+        subject = decode_and_safe(email_msg.get('Subject'))
+
+        from_name, from_addr = parseaddr(str(email_msg.get('From', '')))
+        reply_name, reply_addr = parseaddr(str(email_msg.get('Reply-To', '')))
+        return_path = email_msg.get('Return-Path', '')
+        _, return_addr = parseaddr(return_path)
+
+        original_from = (
+            reply_addr
+            or from_addr
+            or return_addr
+            or "unknown@example.com"
         )
 
-        try:
-            raw_str = raw.decode("utf-8", errors="ignore")
-
-            raw_str = re.sub(
-                r"(?im)^Reply-To:.*\r?\n",
-                "",
-                raw_str
-            )
-
-            raw_str = raw_str.replace(
-                "\r\n\r\n",
-                f"\r\nReply-To: {reply_to}\r\n\r\n",
-                1
-            )
-
-            raw = raw_str.encode("utf-8", errors="ignore")
-
-        except Exception as e:
-            print(f"[WARN] Reply-To injection failed: {e}")
-
+        sender_name = (
+            header_safe(from_name)
+            or header_safe(reply_name)
+            or original_from.split("@")[0]
+        )
 
         # ======================
-        # 🔥 CRITICAL FIX HERE
+        # BULLETPROOF RAW FORWARD
         # ======================
-        raw = fix_long_lines(raw)
+        forward_raw = raw
 
-
-        # ======================
-        # SEND RAW MAIL
-        # ======================
         smtp.sendmail(
-            SMTP_USER,
-            [TARGET_EMAIL],
-            raw
+            SMTP_FROM,
+            TARGET_EMAIL,
+            forward_raw
         )
 
-
+        # löschen nach Erfolg
         pop_conn.dele(i)
-        print(f"[OK] Mail {i} forwarded")
+        print(f"[OK] Mail {i} weitergeleitet & gelöscht")
 
     except Exception as e:
-        print(f"[FEHLER] Mail {i} | {subject} | {e}")
+        safe_subject = subject if subject else "(no subject)"
+        print(f"[FEHLER] Mail {i} | Subject: {safe_subject} | Error: {e}")
 
         try:
             pop_conn.rset()
-        except:
+        except Exception:
             pass
 
-
 # ======================
-# CLEANUP
+# Cleanup
 # ======================
-try:
-    smtp.quit()
-except:
-    pass
+smtp.quit()
+pop_conn.quit()
 
-try:
-    pop_conn.quit()
-except:
-    pass
-
-print("\nFertig.")
+print("\nAlle Mails verarbeitet.")
