@@ -1,8 +1,9 @@
 import os
 import sys
 import poplib
-import smtplib
 import time
+import socket
+import ssl
 import re
 
 from email.header import decode_header, make_header
@@ -59,9 +60,53 @@ SMTP_HOST = os.environ['SMTP_HOST']
 SMTP_PORT = int(os.environ.get('SMTP_PORT', 587))
 
 SMTP_USER = os.environ['SMTP_USER']
-SMTP_PASS = os.environ['SMTP_PASS']
-
 TARGET_EMAIL = os.environ['TARGET_EMAIL']
+
+
+# ======================
+# RAW SMTP SENDER (NO LIMITS)
+# ======================
+def smtp_raw_send(host, port, user, rcpt, raw_message: bytes):
+    sock = socket.create_connection((host, port))
+    sock.settimeout(30)
+
+    def recv():
+        return sock.recv(65536).decode(errors="ignore")
+
+    def send(cmd: str):
+        sock.send((cmd + "\r\n").encode())
+
+    # Banner
+    recv()
+
+    send("EHLO localhost")
+    recv()
+
+    send("STARTTLS")
+    recv()
+
+    context = ssl.create_default_context()
+    sock = context.wrap_socket(sock, server_hostname=host)
+
+    send("EHLO localhost")
+    recv()
+
+    send(f"MAIL FROM:<{user}>")
+    recv()
+
+    send(f"RCPT TO:<{rcpt}>")
+    recv()
+
+    send("DATA")
+    recv()
+
+    sock.sendall(raw_message)
+    sock.sendall(b"\r\n.\r\n")
+
+    recv()
+
+    send("QUIT")
+    sock.close()
 
 
 # ======================
@@ -69,7 +114,7 @@ TARGET_EMAIL = os.environ['TARGET_EMAIL']
 # ======================
 pop_conn = None
 
-for attempt in range(POP3_RETRIES):
+for attempt in range(3):
     try:
         pop_conn = poplib.POP3_SSL(POP3_HOST, timeout=POP3_TIMEOUT)
         pop_conn.user(POP3_USER)
@@ -97,16 +142,6 @@ print(f"{len(uidls)} Mails gefunden.")
 
 
 # ======================
-# SMTP LOGIN
-# ======================
-smtp = smtplib.SMTP(SMTP_HOST, SMTP_PORT)
-smtp.ehlo()
-smtp.starttls()
-smtp.ehlo()
-smtp.login(SMTP_USER, SMTP_PASS)
-
-
-# ======================
 # MAIL LOOP
 # ======================
 for i in sorted(uidls.keys()):
@@ -116,9 +151,8 @@ for i in sorted(uidls.keys()):
     subject = "(unknown subject)"
 
     try:
-
         # ======================
-        # HEADER ONLY FILTER
+        # HEADER ONLY
         # ======================
         resp, lines, _ = pop_conn.top(i, 0)
         raw_header = b"\r\n".join(lines)
@@ -142,20 +176,7 @@ for i in sorted(uidls.keys()):
 
 
         # ======================
-        # EXTRACT REPLY-TO
-        # ======================
-        email_msg = BytesParser(policy=policy.default).parsebytes(raw)
-
-        reply_to = (
-            email_msg.get("Reply-To")
-            or email_msg.get("From")
-            or email_msg.get("Return-Path")
-            or ""
-        )
-
-
-        # ======================
-        # INJECT Reply-To INTO RAW
+        # OPTIONAL: CLEAN DUPLICATE REPLY-TO HEADER (safe)
         # ======================
         try:
             raw_str = raw.decode("utf-8", errors="ignore")
@@ -166,41 +187,32 @@ for i in sorted(uidls.keys()):
                 raw_str
             )
 
-            raw_str = raw_str.replace(
-                "\r\n\r\n",
-                f"\r\nReply-To: {reply_to}\r\n\r\n",
-                1
-            )
-
             raw = raw_str.encode("utf-8", errors="ignore")
 
         except Exception as e:
-            print(f"[WARN] Reply-To injection failed: {e}")
+            print(f"[WARN] Reply-To cleanup failed: {e}")
 
 
         # ======================
-        # 🔥 CRITICAL FIX: RAW SMTP RELAY
+        # RAW SEND VIA SOCKET (NO LIMITS)
         # ======================
-
-        smtp.ehlo()
-        smtp.mail(SMTP_USER)
-        smtp.rcpt(TARGET_EMAIL)
-
-        code, response = smtp.data(raw)
-
-        if code != 250:
-            raise Exception(f"SMTP DATA failed: {code} {response}")
+        smtp_raw_send(
+            SMTP_HOST,
+            SMTP_PORT,
+            SMTP_USER,
+            TARGET_EMAIL,
+            raw
+        )
 
 
         # ======================
         # DELETE AFTER SUCCESS
         # ======================
         pop_conn.dele(i)
-
         print(f"[OK] Mail {i} forwarded")
 
-    except Exception as e:
 
+    except Exception as e:
         print(f"[FEHLER] Mail {i} | {subject} | {e}")
 
         try:
@@ -212,11 +224,6 @@ for i in sorted(uidls.keys()):
 # ======================
 # CLEANUP
 # ======================
-try:
-    smtp.quit()
-except:
-    pass
-
 try:
     pop_conn.quit()
 except:
