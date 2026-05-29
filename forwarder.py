@@ -69,38 +69,28 @@ def recv_until(sock, marker=b"\r\n"):
 
 def recv_multiline(sock):
     """
-    Korrektes POP3 multiline reading.
-    Zeilenweise bis zu einer einzelnen "." Zeile.
+    Liest eine POP3 Multi-Line Response roh ein.
+    Ende ist: CRLF.CRLF
     """
 
-    lines = []
+    data = b""
 
     while True:
+        chunk = sock.recv(4096)
 
-        line = b""
-
-        while not line.endswith(b"\r\n"):
-            chunk = sock.recv(1)
-
-            if not chunk:
-                raise Exception("socket closed")
-
-            line += chunk
-
-        # DEBUG
-        print(f"[LINE] {len(line)} bytes")
-
-        # POP3 terminator
-        if line == b".\r\n":
+        if not chunk:
             break
 
-        # dot unstuffing
-        if line.startswith(b".."):
-            line = line[1:]
+        data += chunk
 
-        lines.append(line)
+        # DEBUG
+        print(f"[DEBUG] received chunk: {len(chunk)} bytes")
 
-    return b"".join(lines)
+        # Ende POP3 multiline
+        if b"\r\n.\r\n" in data:
+            break
+
+    return data
 
 
 def send_cmd(sock, cmd):
