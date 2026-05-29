@@ -1,42 +1,21 @@
 import os
 import sys
-import ssl
 import socket
+import ssl
 import smtplib
-import time
 
-from email.header import decode_header, make_header
 from email.parser import BytesParser
 from email import policy
+from email.utils import parseaddr
 
 # ======================
-# Helper Funktionen
-# ======================
-
-def header_safe(value):
-    if not value:
-        return ""
-    return " ".join(str(value).split())
-
-
-def decode_and_safe(header_value):
-    if not header_value:
-        return "(no subject)"
-
-    try:
-        return header_safe(str(make_header(decode_header(header_value))))
-    except Exception as e:
-        print(f"[DEBUG] Subject decode error: {e}")
-        return "(invalid subject)"
-
-
-# ======================
-# Konfiguration
+# CONFIG
 # ======================
 
 POP3_HOST = os.environ['POP3_HOST']
 POP3_USER = os.environ['POP3_USER']
 POP3_PASS = os.environ['POP3_PASS']
+POP3_PORT = 995
 
 SMTP_HOST = os.environ['SMTP_HOST']
 SMTP_PORT = int(os.environ.get('SMTP_PORT', 587))
@@ -46,55 +25,30 @@ SMTP_PASS = os.environ['SMTP_PASS']
 SMTP_FROM = os.environ['SMTP_FROM']
 TARGET_EMAIL = os.environ['TARGET_EMAIL']
 
-POP3_PORT = 995
-
-
 # ======================
-# Socket Helper
+# POP3 LOW LEVEL
 # ======================
 
-def recv_until(sock, marker=b"\r\n"):
+def recv_line(sock):
     data = b""
-
-    while marker not in data:
-        chunk = sock.recv(1)
-
-        if not chunk:
-            break
-
-        data += chunk
-
+    while not data.endswith(b"\r\n"):
+        data += sock.recv(1)
     return data
 
 
 def recv_multiline(sock):
-    """
-    Korrektes POP3 multiline reading.
-    Zeilenweise bis zu einer einzelnen "." Zeile.
-    """
-
     lines = []
-
     while True:
-
         line = b""
-
         while not line.endswith(b"\r\n"):
             chunk = sock.recv(1)
-
             if not chunk:
-                raise Exception("socket closed")
-
+                break
             line += chunk
 
-        # DEBUG
-        print(f"[LINE] {len(line)} bytes")
-
-        # POP3 terminator
         if line == b".\r\n":
             break
 
-        # dot unstuffing
         if line.startswith(b".."):
             line = line[1:]
 
@@ -104,211 +58,124 @@ def recv_multiline(sock):
 
 
 def send_cmd(sock, cmd):
-    print(f"\n[CLIENT] {cmd}")
-
     sock.sendall((cmd + "\r\n").encode())
-
-    resp = recv_until(sock)
-
-    print(f"[SERVER] {resp[:500]!r}")
-
-    return resp
+    return recv_line(sock)
 
 
 # ======================
-# POP3 Verbindung
+# CONNECT POP3
 # ======================
 
-print("[DEBUG] connecting...")
+print("[DEBUG] connecting POP3...")
 
 raw_sock = socket.create_connection((POP3_HOST, POP3_PORT), timeout=60)
+sock = ssl.create_default_context().wrap_socket(raw_sock, server_hostname=POP3_HOST)
 
-sock = ssl.create_default_context().wrap_socket(
-    raw_sock,
-    server_hostname=POP3_HOST
-)
+print("[SERVER]", recv_line(sock))
 
-# Greeting
-greeting = recv_until(sock)
+print(send_cmd(sock, f"USER {POP3_USER}"))
+print(send_cmd(sock, f"PASS {POP3_PASS}"))
 
-print(f"[SERVER GREETING] {greeting!r}")
+stat = send_cmd(sock, "STAT").decode(errors="ignore")
+mail_count = int(stat.split()[1])
 
-# ======================
-# Login
-# ======================
-
-send_cmd(sock, f"USER {POP3_USER}")
-send_cmd(sock, f"PASS {POP3_PASS}")
+print(f"{mail_count} mails found")
 
 # ======================
-# STAT
-# ======================
-
-stat_resp = send_cmd(sock, "STAT")
-
-try:
-    parts = stat_resp.decode(errors="ignore").split()
-
-    mail_count = int(parts[1])
-
-except Exception:
-    print("[ERROR] could not parse STAT")
-    sys.exit(1)
-
-print(f"\n{mail_count} mails found.")
-
-if mail_count == 0:
-    print("No mails.")
-    send_cmd(sock, "QUIT")
-    sys.exit(0)
-
-# ======================
-# SMTP Login
+# SMTP
 # ======================
 
 smtp = smtplib.SMTP(SMTP_HOST, SMTP_PORT)
-
 smtp.starttls()
-
 smtp.login(SMTP_USER, SMTP_PASS)
 
 # ======================
-# Mail Verarbeitung
+# HEADERS TO REMOVE
+# ======================
+
+STRIP_HEADERS = {
+    "return-path",
+    "delivered-to",
+    "received",
+    "dkim-signature",
+    "authentication-results",
+    "arc-seal",
+    "arc-message-signature",
+    "arc-authentication-results"
+}
+
+# ======================
+# PROCESS MAILS
 # ======================
 
 for i in range(1, mail_count + 1):
 
-    print(f"\n==============================")
-    print(f"[MAIL {i}]")
-    print(f"==============================")
+    print(f"\n[MAIL {i}]")
 
     try:
+        send_cmd(sock, f"RETR {i}")
+
+        raw = recv_multiline(sock)
+
+        print(f"[DEBUG] raw size: {len(raw)} bytes")
 
         # ======================
-        # RETR
+        # PARSE MIME
         # ======================
 
-        sock.sendall(f"RETR {i}\r\n".encode())
+        msg = BytesParser(policy=policy.default).parsebytes(raw)
 
-        first_line = recv_until(sock)
-
-        print(f"[RETR RESPONSE] {first_line!r}")
-
-        if not first_line.startswith(b"+OK"):
-            print("[ERROR] RETR failed")
-            continue
-
-        print("[DEBUG] reading raw multiline mail...")
-
-        raw_data = recv_multiline(sock)
-
-        print(f"[DEBUG] total raw size: {len(raw_data)} bytes")
+        subject = msg.get("Subject", "(no subject)")
+        print("[SUBJECT]", subject)
 
         # ======================
-        # DEBUG: Zeilen analysieren
+        # REMOVE TRANSPORT HEADERS
         # ======================
 
-        lines = raw_data.split(b"\r\n")
-
-        print(f"[DEBUG] total lines: {len(lines)}")
-
-        longest = 0
-
-        for idx, line in enumerate(lines):
-
-            line_len = len(line)
-
-            if line_len > longest:
-                longest = line_len
-
-            if line_len > 1000:
-                print(
-                    f"[LONG LINE] line={idx} bytes={line_len}"
-                )
-
-                print(line[:300])
-
-        print(f"[DEBUG] longest line: {longest} bytes")
+        for h in list(msg.keys()):
+            if h.lower() in STRIP_HEADERS:
+                del msg[h]
 
         # ======================
-        # POP3 Terminator entfernen
+        # SET CLEAN REPLY-TO (optional)
         # ======================
 
-        if raw_data.endswith(b"\r\n.\r\n"):
-            raw_data = raw_data[:-5]
+        original_reply_to = msg.get("Reply-To")
+
+        if original_reply_to:
+            msg.replace_header("Reply-To", original_reply_to)
+        else:
+            from_name, from_addr = parseaddr(msg.get("From", ""))
+            if from_addr:
+                msg["Reply-To"] = from_addr
 
         # ======================
-        # Header Parsing
+        # FORWARD CLEAN MESSAGE
         # ======================
 
-        try:
-            email_msg = BytesParser(
-                policy=policy.default
-            ).parsebytes(raw_data)
+        smtp.send_message(
+            msg,
+            from_addr=SMTP_FROM,
+            to_addrs=TARGET_EMAIL
+        )
 
-            subject = decode_and_safe(
-                email_msg.get("Subject")
-            )
+        print("[OK] forwarded")
 
-        except Exception as e:
-
-            print(f"[HEADER PARSE ERROR] {e}")
-
-            subject = "(parse failed)"
-
-        print(f"[SUBJECT] {subject}")
-
-        # ======================
-        # SMTP FORWARD
-        # ======================
-
-        try:
-
-            smtp.sendmail(
-                SMTP_FROM,
-                TARGET_EMAIL,
-                raw_data
-            )
-
-            print("[OK] forwarded")
-
-        except Exception as e:
-
-            print(f"[SMTP ERROR] {e}")
-
-            continue
-
-        # ======================
-        # DELETE
-        # ======================
-
-        del_resp = send_cmd(sock, f"DELE {i}")
-
-        print(f"[DELETE] {del_resp!r}")
+        send_cmd(sock, f"DELE {i}")
 
     except Exception as e:
-
-        print(f"[FATAL MAIL ERROR] {e}")
+        print(f"[ERROR MAIL {i}]", e)
 
 # ======================
-# Cleanup
+# CLEANUP
 # ======================
-
-print("\n[DEBUG] cleanup")
 
 try:
     send_cmd(sock, "QUIT")
-except Exception as e:
-    print(f"[WARN] QUIT failed: {e}")
-
-try:
-    smtp.quit()
-except Exception as e:
-    print(f"[WARN] SMTP quit failed: {e}")
-
-try:
-    sock.close()
 except Exception:
     pass
 
-print("\nDone.")
+smtp.quit()
+sock.close()
+
+print("\nDONE")
