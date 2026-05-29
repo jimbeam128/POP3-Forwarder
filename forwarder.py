@@ -9,18 +9,6 @@ from email import policy
 from email.parser import BytesParser
 
 # ======================
-# FILTER KONFIG
-# ======================
-FILTER_WORDS = [
-    "pervert",
-    "trojan",
-    "crypto",
-    "urgent",
-    "masturbating",
-    "recorded",
-]
-
-# ======================
 # Helper Funktionen
 # ======================
 def header_safe(value):
@@ -63,11 +51,9 @@ TARGET_EMAIL = os.environ['TARGET_EMAIL']
 # ======================
 UIDL_FILE = "processed_uidls.txt"
 processed_uidls = set()
-
 if os.path.exists(UIDL_FILE):
     with open(UIDL_FILE, "r") as f:
         processed_uidls = set(line.strip() for line in f if line.strip())
-
 
 # ======================
 # POP3 Login
@@ -84,9 +70,8 @@ for attempt in range(POP3_RETRIES):
         time.sleep(5)
 
 if not pop_conn:
-    print("[WARN] POP3 Login endgültig fehlgeschlagen")
+    print(f"[WARN] POP3 Login endgültig fehlgeschlagen")
     sys.exit(0)
-
 
 # ======================
 # UIDLs abrufen
@@ -101,7 +86,6 @@ if not uidls:
     pop_conn.quit()
     sys.exit(0)
 
-
 # ======================
 # SMTP Login
 # ======================
@@ -109,64 +93,64 @@ smtp = smtplib.SMTP(SMTP_HOST, SMTP_PORT)
 smtp.starttls()
 smtp.login(SMTP_USER, SMTP_PASS)
 
-
 # ======================
 # Mail-Verarbeitung
 # ======================
 for i in sorted(uidls.keys()):
     print(f"\n[DEBUG] === Mail {i} ===")
-
     subject = "(unknown subject)"
 
     try:
-        # ======================
-        # 1. HEADER ONLY FETCH (KEIN RETR!)
-        # ======================
-        resp, lines, _ = pop_conn.top(i, 0)
-        raw_header = b"\r\n".join(lines)
-
-        email_msg = BytesParser(policy=policy.default).parsebytes(raw_header)
-
-        subject = decode_and_safe(email_msg.get('Subject'))
-        subject_lower = subject.lower()
-
-        # ======================
-        # FILTER BEFORE RETR
-        # ======================
-        if any(word in subject_lower for word in FILTER_WORDS):
-            print(f"[FILTERED] Mail {i} gelöscht (Header match)")
-
-            pop_conn.dele(i)
-            continue
-
-        # ======================
-        # 2. NOW SAFE RETR
-        # ======================
+        # RAW Mail holen
         resp, lines, _ = pop_conn.retr(i)
         raw = b"\r\n".join(lines)
 
+        # Nur Header parsen (kein Rebuild!)
         email_msg = BytesParser(policy=policy.default).parsebytes(raw)
 
-        # ======================
-        # SEND
-        # ======================
-        smtp.send_message(
-            email_msg,
-            from_addr=SMTP_FROM,
-            to_addrs=TARGET_EMAIL
+        subject = decode_and_safe(email_msg.get('Subject'))
+
+        from_name, from_addr = parseaddr(str(email_msg.get('From', '')))
+        reply_name, reply_addr = parseaddr(str(email_msg.get('Reply-To', '')))
+        return_path = email_msg.get('Return-Path', '')
+        _, return_addr = parseaddr(return_path)
+
+        original_from = (
+            reply_addr
+            or from_addr
+            or return_addr
+            or "unknown@example.com"
         )
 
+        sender_name = (
+            header_safe(from_name)
+            or header_safe(reply_name)
+            or original_from.split("@")[0]
+        )
+
+        # ======================
+        # BULLETPROOF RAW FORWARD
+        # ======================
+        forward_raw = raw
+
+        smtp.sendmail(
+            SMTP_FROM,
+            TARGET_EMAIL,
+            forward_raw
+        )
+
+        # löschen nach Erfolg
         pop_conn.dele(i)
-        print(f"[OK] Mail {i} forwarded & deleted")
+        print(f"[OK] Mail {i} weitergeleitet & gelöscht")
 
     except Exception as e:
-        print(f"[FEHLER] Mail {i} | Subject: {subject} | Error: {e}")
+        safe_subject = subject if subject else "(no subject)"
+        print(f"[FEHLER] Mail {i} | Subject: {safe_subject} | Error: {e}")
 
         try:
             pop_conn.rset()
         except Exception:
             pass
-
 
 # ======================
 # Cleanup
