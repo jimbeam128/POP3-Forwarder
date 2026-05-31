@@ -1,6 +1,7 @@
 import os
 import sys
-import poplib
+import socket
+import ssl
 import smtplib
 import time
 
@@ -30,103 +31,134 @@ TARGET_EMAIL = os.environ["TARGET_EMAIL"]
 
 
 # ======================
-# SUBJECT EXTRACT (SAFE)
+# SIMPLE SOCKET POP3 CLIENT
+# ======================
+class RawPOP3:
+    def __init__(self, host, port=995):
+        ctx = ssl.create_default_context()
+        sock = socket.create_connection((host, port))
+        self.conn = ctx.wrap_socket(sock, server_hostname=host)
+
+        self._readline()  # greeting
+
+    def send(self, cmd):
+        self.conn.sendall((cmd + "\r\n").encode())
+
+    def _readline(self):
+        return self.conn.recv(4096)
+
+    def auth(self, user, pw):
+        self.send(f"USER {user}")
+        self._readline()
+
+        self.send(f"PASS {pw}")
+        self._readline()
+
+    def list(self):
+        self.send("LIST")
+        data = self._multiline()
+        ids = []
+        for line in data:
+            try:
+                ids.append(int(line.split()[0]))
+            except:
+                pass
+        return ids
+
+    def retr(self, i):
+        self.send(f"RETR {i}")
+        return self._multiline(raw=True)
+
+    def dele(self, i):
+        self.send(f"DELE {i}")
+        self._readline()
+
+    def quit(self):
+        try:
+            self.send("QUIT")
+            self._readline()
+        except:
+            pass
+
+        self.conn.close()
+
+    def _multiline(self, raw=False):
+        buf = b""
+        lines = []
+
+        while True:
+            chunk = self.conn.recv(4096)
+            if not chunk:
+                break
+
+            buf += chunk
+
+            while b"\r\n" in buf:
+                line, buf = buf.split(b"\r\n", 1)
+
+                if line == b".":
+                    return lines
+
+                if raw:
+                    lines.append(line + b"\r\n")
+                else:
+                    lines.append(line.decode("utf-8", errors="ignore"))
+
+        return lines
+
+
+# ======================
+# SUBJECT EXTRACTION
 # ======================
 def extract_subject(lines):
-    for line in lines:
-        try:
-            s = line.decode("utf-8", errors="ignore")
-        except Exception:
-            continue
-
+    for l in lines:
+        s = l.decode("utf-8", errors="ignore")
         if s.lower().startswith("subject:"):
             return s.split(":", 1)[1].strip()
-
         if s.strip() == "":
             break
-
     return "(unknown subject)"
 
 
-def is_filtered(subject):
+def filtered(subject):
     s = subject.lower()
     return any(w in s for w in FILTER_WORDS)
 
 
 # ======================
-# SAFE POP3 STREAM RETR (KEY FIX)
+# CONNECT
 # ======================
-def safe_retr(pop_conn, msg_id):
-    """
-    ersetzt poplib.retr komplett
-    robust gegen:
-    - line too long
-    - kaputte Tabs
-    - malformed server output
-    """
-
-    pop_conn.putcmd(f"RETR {msg_id}")
-    resp = pop_conn.getresp()
-
-    lines = []
-
-    while True:
-        try:
-            line = pop_conn._getmultiline()
-        except Exception:
-            break
-
-        if line == b".":
-            break
-
-        # sanitizing only for safety, NOT altering mail content logic
-        lines.append(line)
-
-    return lines
-
-
-# ======================
-# LOGIN
-# ======================
-pop_conn = poplib.POP3_SSL(POP3_HOST, timeout=30)
-pop_conn.user(POP3_USER)
-pop_conn.pass_(POP3_PASS)
+pop = RawPOP3(POP3_HOST)
+pop.auth(POP3_USER, POP3_PASS)
 
 smtp = smtplib.SMTP(SMTP_HOST, SMTP_PORT)
 smtp.starttls()
 smtp.login(SMTP_USER, SMTP_PASS)
 
-
-# ======================
-# MAIL LIST
-# ======================
-resp, mails, _ = pop_conn.list()
-ids = [int(m.decode().split()[0]) for m in mails]
-
-print(f"{len(ids)} Mails gefunden")
-
-
 # ======================
 # PROCESS
 # ======================
+ids = pop.list()
+
+print(f"{len(ids)} Mails gefunden")
+
 for i in ids:
 
     print(f"\n[MAIL {i}]")
 
     try:
-        # SAFE RETR (NO poplib.retr!)
-        lines = safe_retr(pop_conn, i)
-
-        raw = b"\r\n".join(lines)
+        lines = pop.retr(i)
 
         subject = extract_subject(lines)
 
         print(f"[SUBJECT] {subject}")
 
-        if is_filtered(subject):
+        if filtered(subject):
             print("[FILTER] deleted")
-            pop_conn.dele(i)
+            pop.dele(i)
             continue
+
+        raw = b"".join(lines)
 
         smtp.sendmail(
             SMTP_FROM,
@@ -134,29 +166,21 @@ for i in ids:
             raw
         )
 
-        pop_conn.dele(i)
+        pop.dele(i)
 
         print("[OK] forwarded")
 
     except Exception as e:
         print(f"[ERROR] {i}: {e}")
-        try:
-            pop_conn.rset()
-        except Exception:
-            pass
-
 
 # ======================
 # CLEANUP
 # ======================
-try:
-    smtp.quit()
-except Exception:
-    pass
+pop.quit()
 
 try:
-    pop_conn.quit()
-except Exception:
+    smtp.quit()
+except:
     pass
 
 print("\nDone.")
