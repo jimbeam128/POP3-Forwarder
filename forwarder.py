@@ -1,26 +1,75 @@
 import os
 import sys
-import socket
-import ssl
+import poplib
 import smtplib
 import time
 
+from email.parser import HeaderParser
+from email.header import decode_header, make_header
+
 # ======================
-# CONFIG
+# FILTER KONFIG
 # ======================
 FILTER_WORDS = [
     "pervert",
     "trojan",
     "crypto",
     "masturbating",
+    "recorded",
     "bitcoin",
     "urgent",
 ]
 
+# ======================
+# Helper
+# ======================
+def decode_subject(value):
+    if not value:
+        return ""
+    try:
+        return str(make_header(decode_header(value)))
+    except Exception:
+        return str(value)
+
+
+def contains_filter(subject: str) -> bool:
+    s = subject.lower()
+    return any(w.lower() in s for w in FILTER_WORDS)
+
+
+def inject_reply_to(headers: bytes, reply_to: str) -> bytes:
+    """
+    Entfernt vorhandenes Reply-To und setzt neues sauber.
+    Nur Header-Teil wird verändert.
+    """
+    lines = headers.split(b"\r\n")
+    new_lines = []
+
+    for line in lines:
+        # alte Reply-To entfernen
+        if line.lower().startswith(b"reply-to:"):
+            continue
+        new_lines.append(line)
+
+    if reply_to:
+        new_lines.append(f"Reply-To: {reply_to}".encode())
+
+    return b"\r\n".join(new_lines)
+
+
+# ======================
+# POP3 CONFIG
+# ======================
 POP3_HOST = os.environ["POP3_HOST"]
 POP3_USER = os.environ["POP3_USER"]
 POP3_PASS = os.environ["POP3_PASS"]
 
+POP3_TIMEOUT = 30
+POP3_RETRIES = 3
+
+# ======================
+# SMTP CONFIG
+# ======================
 SMTP_HOST = os.environ["SMTP_HOST"]
 SMTP_PORT = int(os.environ.get("SMTP_PORT", 587))
 SMTP_USER = os.environ["SMTP_USER"]
@@ -31,155 +80,128 @@ TARGET_EMAIL = os.environ["TARGET_EMAIL"]
 
 
 # ======================
-# SIMPLE SOCKET POP3 CLIENT
+# LOGIN POP3
 # ======================
-class RawPOP3:
-    def __init__(self, host, port=995):
-        ctx = ssl.create_default_context()
-        sock = socket.create_connection((host, port))
-        self.conn = ctx.wrap_socket(sock, server_hostname=host)
+pop_conn = None
 
-        self._readline()  # greeting
+for i in range(POP3_RETRIES):
+    try:
+        pop_conn = poplib.POP3_SSL(POP3_HOST, timeout=POP3_TIMEOUT)
+        pop_conn.user(POP3_USER)
+        pop_conn.pass_(POP3_PASS)
+        break
+    except Exception as e:
+        print(f"[WARN] POP3 Login fehlgeschlagen {i+1}: {e}")
+        time.sleep(5)
 
-    def send(self, cmd):
-        self.conn.sendall((cmd + "\r\n").encode())
-
-    def _readline(self):
-        return self.conn.recv(4096)
-
-    def auth(self, user, pw):
-        self.send(f"USER {user}")
-        self._readline()
-
-        self.send(f"PASS {pw}")
-        self._readline()
-
-    def list(self):
-        self.send("LIST")
-        data = self._multiline()
-        ids = []
-        for line in data:
-            try:
-                ids.append(int(line.split()[0]))
-            except:
-                pass
-        return ids
-
-    def retr(self, i):
-        self.send(f"RETR {i}")
-        return self._multiline(raw=True)
-
-    def dele(self, i):
-        self.send(f"DELE {i}")
-        self._readline()
-
-    def quit(self):
-        try:
-            self.send("QUIT")
-            self._readline()
-        except:
-            pass
-
-        self.conn.close()
-
-    def _multiline(self, raw=False):
-        buf = b""
-        lines = []
-
-        while True:
-            chunk = self.conn.recv(4096)
-            if not chunk:
-                break
-
-            buf += chunk
-
-            while b"\r\n" in buf:
-                line, buf = buf.split(b"\r\n", 1)
-
-                if line == b".":
-                    return lines
-
-                if raw:
-                    lines.append(line + b"\r\n")
-                else:
-                    lines.append(line.decode("utf-8", errors="ignore"))
-
-        return lines
+if not pop_conn:
+    print("POP3 Login failed")
+    sys.exit(1)
 
 
 # ======================
-# SUBJECT EXTRACTION
+# LIST MAILS
 # ======================
-def extract_subject(lines):
-    for l in lines:
-        s = l.decode("utf-8", errors="ignore")
-        if s.lower().startswith("subject:"):
-            return s.split(":", 1)[1].strip()
-        if s.strip() == "":
-            break
-    return "(unknown subject)"
+resp, mails, _ = pop_conn.list()
+ids = [int(m.decode().split()[0]) for m in mails]
 
-
-def filtered(subject):
-    s = subject.lower()
-    return any(w in s for w in FILTER_WORDS)
+print(f"{len(ids)} Mails gefunden.")
 
 
 # ======================
-# CONNECT
+# SMTP LOGIN
 # ======================
-pop = RawPOP3(POP3_HOST)
-pop.auth(POP3_USER, POP3_PASS)
-
 smtp = smtplib.SMTP(SMTP_HOST, SMTP_PORT)
 smtp.starttls()
 smtp.login(SMTP_USER, SMTP_PASS)
 
+
 # ======================
-# PROCESS
+# PROCESS MAILS
 # ======================
-ids = pop.list()
+for msg_id in ids:
 
-print(f"{len(ids)} Mails gefunden")
-
-for i in ids:
-
-    print(f"\n[MAIL {i}]")
+    print(f"\n[MAIL {msg_id}]")
 
     try:
-        lines = pop.retr(i)
+        # RAW holen
+        resp, lines, _ = pop_conn.retr(msg_id)
 
-        subject = extract_subject(lines)
+        raw = b"\r\n".join(lines)
+
+        # Header / Body trennen
+        split_pos = raw.find(b"\r\n\r\n")
+
+        if split_pos == -1:
+            print("[ERROR] Invalid mail format")
+            continue
+
+        raw_headers = raw[:split_pos]
+        raw_body = raw[split_pos + 4:]
+
+        # Header parsen (nur für Analyse)
+        headers = HeaderParser().parsestr(raw_headers.decode(errors="ignore"))
+
+        subject = decode_subject(headers.get("Subject", ""))
 
         print(f"[SUBJECT] {subject}")
 
-        if filtered(subject):
-            print("[FILTER] deleted")
-            pop.dele(i)
+        # ======================
+        # FILTER
+        # ======================
+        if contains_filter(subject):
+            print("[FILTER] Mail gelöscht")
+            pop_conn.dele(msg_id)
             continue
 
-        raw = b"".join(lines)
+        # ======================
+        # Reply-To bestimmen
+        # ======================
+        reply_to = headers.get("Reply-To")
 
+        if not reply_to:
+            reply_to = headers.get("From", "")
+
+        # ======================
+        # HEADER PATCHEN (OHNE BODY TOUCH)
+        # ======================
+        new_headers = inject_reply_to(raw_headers, reply_to)
+
+        # ======================
+        # FINAL RAW MAIL
+        # ======================
+        final_mail = new_headers + b"\r\n\r\n" + raw_body
+
+        # ======================
+        # SEND (1:1 RFC SAFE)
+        # ======================
         smtp.sendmail(
             SMTP_FROM,
             TARGET_EMAIL,
-            raw
+            final_mail
         )
 
-        pop.dele(i)
-
+        pop_conn.dele(msg_id)
         print("[OK] forwarded")
 
     except Exception as e:
-        print(f"[ERROR] {i}: {e}")
+        print(f"[ERROR] {msg_id}: {e}")
+        try:
+            pop_conn.rset()
+        except:
+            pass
+
 
 # ======================
 # CLEANUP
 # ======================
-pop.quit()
-
 try:
     smtp.quit()
+except:
+    pass
+
+try:
+    pop_conn.quit()
 except:
     pass
 
