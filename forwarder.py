@@ -62,6 +62,7 @@ SMTP_PASS = os.environ["SMTP_PASS"]
 SMTP_FROM = os.environ["SMTP_FROM"]
 TARGET_EMAIL = os.environ["TARGET_EMAIL"]
 
+
 # ======================
 # POP3 Login
 # ======================
@@ -76,7 +77,6 @@ for attempt in range(POP3_RETRIES):
         pop_conn.user(POP3_USER)
         pop_conn.pass_(POP3_PASS)
         break
-
     except Exception as e:
         print(f"[WARN] POP3 Login fehlgeschlagen ({attempt+1}): {e}")
         time.sleep(5)
@@ -84,6 +84,7 @@ for attempt in range(POP3_RETRIES):
 if not pop_conn:
     print("[WARN] POP3 Login endgültig fehlgeschlagen")
     sys.exit(0)
+
 
 # ======================
 # UIDLs abrufen
@@ -101,12 +102,14 @@ if not uidls:
     pop_conn.quit()
     sys.exit(0)
 
+
 # ======================
 # SMTP Login
 # ======================
 smtp = smtplib.SMTP(SMTP_HOST, SMTP_PORT)
 smtp.starttls()
 smtp.login(SMTP_USER, SMTP_PASS)
+
 
 # ======================
 # Mail-Verarbeitung
@@ -119,75 +122,71 @@ for i in sorted(uidls.keys()):
 
     try:
         # ======================
-        # RAW Mail laden
+        # RAW MAIL HOLEN
         # ======================
         resp, lines, _ = pop_conn.retr(i)
-
         raw = b"\r\n".join(lines)
 
-        original_msg = BytesParser(
-            policy=policy.default
-        ).parsebytes(raw)
-
-        subject = decode_and_safe(
-            original_msg.get("Subject")
-        )
-
         # ======================
-        # Betreff-Filter
+        # SAFE PARSING (FIX HIER!)
         # ======================
-        subject_lower = subject.lower()
+        try:
+            original_msg = BytesParser(
+                policy=policy.compat32   # <<< WICHTIGER FIX
+            ).parsebytes(raw)
 
-        if any(
-            word.lower() in subject_lower
-            for word in FILTER_WORDS
-        ):
-            print(
-                f"[FILTER] Mail gelöscht | Subject: {subject}"
+        except Exception as e:
+            print(f"[WARN] Parserfehler → RAW fallback: {e}")
+
+            smtp.sendmail(
+                SMTP_FROM,
+                TARGET_EMAIL,
+                raw
             )
 
             pop_conn.dele(i)
             continue
 
-        # ======================
-        # Neue RFC-saubere Mail
-        # ======================
-        clean_msg = EmailMessage()
+        subject = decode_and_safe(
+            original_msg.get("Subject", "")
+        )
 
-        # sichtbare Header übernehmen
-        for hdr in [
-            "Subject",
-            "Date",
-            "Reply-To",
-            "Cc"
-        ]:
-            if original_msg.get(hdr):
-                clean_msg[hdr] = original_msg[hdr]
+        subject_lower = subject.lower()
 
-        # Original-Absender ermitteln
+        # ======================
+        # FILTER
+        # ======================
+        if any(word in subject_lower for word in FILTER_WORDS):
+            print(f"[FILTER] Mail gelöscht | Subject: {subject}")
+            pop_conn.dele(i)
+            continue
+
+        # ======================
+        # FROM / REPLY-TO FIX
+        # ======================
+        reply_addr = ""
         from_addr = ""
 
         if original_msg.get("Reply-To"):
-            _, from_addr = parseaddr(
-                original_msg["Reply-To"]
-            )
+            _, reply_addr = parseaddr(original_msg["Reply-To"])
 
-        if not from_addr and original_msg.get("From"):
-            _, from_addr = parseaddr(
-                original_msg["From"]
-            )
+        if original_msg.get("From"):
+            _, from_addr = parseaddr(original_msg["From"])
 
-        if not from_addr:
-            from_addr = SMTP_FROM
+        original_sender = reply_addr or from_addr or SMTP_FROM
+
+        # ======================
+        # CLEAN MESSAGE BUILD
+        # ======================
+        clean_msg = EmailMessage()
 
         clean_msg["From"] = SMTP_FROM
         clean_msg["To"] = TARGET_EMAIL
-
-        if from_addr:
-            clean_msg["Reply-To"] = from_addr
+        clean_msg["Reply-To"] = original_sender
+        clean_msg["Subject"] = subject
 
         # ======================
-        # Multipart Mail
+        # MIME COPY (BODY + ATTACHMENTS)
         # ======================
         if original_msg.is_multipart():
 
@@ -196,18 +195,11 @@ for i in sorted(uidls.keys()):
                 if part.is_multipart():
                     continue
 
-                content_disposition = (
-                    part.get_content_disposition()
-                )
-
-                payload = part.get_payload(
-                    decode=True
-                )
-
+                payload = part.get_payload(decode=True)
                 maintype = part.get_content_maintype()
                 subtype = part.get_content_subtype()
 
-                if content_disposition == "attachment":
+                if part.get_content_disposition() == "attachment":
 
                     clean_msg.add_attachment(
                         payload,
@@ -217,95 +209,56 @@ for i in sorted(uidls.keys()):
                     )
 
                 else:
-
-                    charset = (
-                        part.get_content_charset()
-                        or "utf-8"
-                    )
+                    charset = part.get_content_charset() or "utf-8"
 
                     try:
-                        text = payload.decode(
-                            charset,
-                            errors="replace"
-                        )
+                        text = payload.decode(charset, errors="replace")
                     except Exception:
-                        text = payload.decode(
-                            "utf-8",
-                            errors="replace"
-                        )
+                        text = payload.decode("utf-8", errors="replace")
 
                     if subtype == "html":
-                        clean_msg.add_alternative(
-                            text,
-                            subtype="html"
-                        )
+                        clean_msg.add_alternative(text, subtype="html")
                     else:
-                        if clean_msg.get_content_maintype() == "multipart":
-                            continue
-
                         clean_msg.set_content(text)
 
-        # ======================
-        # Singlepart Mail
-        # ======================
         else:
+            payload = original_msg.get_payload(decode=True)
 
-            payload = original_msg.get_payload(
-                decode=True
-            )
-
-            charset = (
-                original_msg.get_content_charset()
-                or "utf-8"
-            )
+            charset = original_msg.get_content_charset() or "utf-8"
 
             try:
-                text = payload.decode(
-                    charset,
-                    errors="replace"
-                )
+                text = payload.decode(charset, errors="replace")
             except Exception:
-                text = payload.decode(
-                    "utf-8",
-                    errors="replace"
-                )
+                text = payload.decode("utf-8", errors="replace")
 
-            subtype = (
-                original_msg.get_content_subtype()
-            )
+            subtype = original_msg.get_content_subtype()
 
             if subtype == "html":
-                clean_msg.add_alternative(
-                    text,
-                    subtype="html"
-                )
+                clean_msg.add_alternative(text, subtype="html")
             else:
                 clean_msg.set_content(text)
 
         # ======================
-        # Versand
+        # SEND
         # ======================
         smtp.send_message(clean_msg)
 
         pop_conn.dele(i)
 
-        print(
-            f"[OK] Mail {i} weitergeleitet & gelöscht"
-        )
+        print(f"[OK] Mail {i} weitergeleitet & gelöscht")
 
     except Exception as e:
 
-        print(
-            f"[FEHLER] Mail {i} | Subject: {subject} | Error: {e}"
-        )
+        print(f"[FEHLER] Mail {i} | Subject: {subject} | Error: {e}")
 
         try:
             pop_conn.rset()
         except Exception:
             pass
 
+
 # ======================
-# Cleanup
+# CLEANUP
 # ======================
 try:
     smtp.quit()
