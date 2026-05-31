@@ -9,6 +9,19 @@ from email import policy
 from email.parser import BytesParser
 
 # ======================
+# Betreff-Filter
+# ======================
+FILTER_WORDS = [
+    "pervert",
+    "trojan",
+    "crypto",
+    "masturbating",
+    "recorded",
+    "bitcoin",
+    "urgent",
+]
+
+# ======================
 # Helper Funktionen
 # ======================
 def header_safe(value):
@@ -24,20 +37,6 @@ def decode_and_safe(header_value):
     except Exception as e:
         print(f"[DEBUG] Subject decode error: {e}")
         return "(invalid subject)"
-
-
-# ======================
-# Betreff-Filter
-# ======================
-FILTER_WORDS = [
-    "pervert",
-    "trojan",
-    "crypto",
-    "masturbating",
-    "recorded",
-    "bitcoin",
-    "urgent",
-]
 
 
 # ======================
@@ -65,6 +64,7 @@ TARGET_EMAIL = os.environ['TARGET_EMAIL']
 # ======================
 UIDL_FILE = "processed_uidls.txt"
 processed_uidls = set()
+
 if os.path.exists(UIDL_FILE):
     with open(UIDL_FILE, "r") as f:
         processed_uidls = set(line.strip() for line in f if line.strip())
@@ -73,25 +73,34 @@ if os.path.exists(UIDL_FILE):
 # POP3 Login
 # ======================
 pop_conn = None
+
 for attempt in range(POP3_RETRIES):
     try:
-        pop_conn = poplib.POP3_SSL(POP3_HOST, timeout=POP3_TIMEOUT)
+        pop_conn = poplib.POP3_SSL(
+            POP3_HOST,
+            timeout=POP3_TIMEOUT
+        )
         pop_conn.user(POP3_USER)
         pop_conn.pass_(POP3_PASS)
         break
+
     except Exception as e:
         print(f"[WARN] POP3 Login fehlgeschlagen ({attempt+1}): {e}")
         time.sleep(5)
 
 if not pop_conn:
-    print(f"[WARN] POP3 Login endgültig fehlgeschlagen")
+    print("[WARN] POP3 Login endgültig fehlgeschlagen")
     sys.exit(0)
 
 # ======================
 # UIDLs abrufen
 # ======================
 resp, uidl_list, _ = pop_conn.uidl()
-uidls = {int(e.decode().split()[0]): e.decode().split()[1] for e in uidl_list}
+
+uidls = {
+    int(e.decode().split()[0]): e.decode().split()[1]
+    for e in uidl_list
+}
 
 print(f"{len(uidls)} Mails im Quellpostfach gefunden.")
 
@@ -111,33 +120,61 @@ smtp.login(SMTP_USER, SMTP_PASS)
 # Mail-Verarbeitung
 # ======================
 for i in sorted(uidls.keys()):
+
     print(f"\n[DEBUG] === Mail {i} ===")
+
     subject = "(unknown subject)"
 
     try:
+        # ======================
         # RAW Mail holen
+        # ======================
         resp, lines, _ = pop_conn.retr(i)
         raw = b"\r\n".join(lines)
 
-        # Nur Header parsen (kein Rebuild!)
-        email_msg = BytesParser(policy=policy.default).parsebytes(raw)
+        # ======================
+        # Header lesen
+        # ======================
+        email_msg = BytesParser(
+            policy=policy.default
+        ).parsebytes(raw)
 
-        subject = decode_and_safe(email_msg.get('Subject'))
+        subject = decode_and_safe(
+            email_msg.get('Subject')
+        )
 
         # ======================
         # Betreff-Filter
         # ======================
         subject_lower = subject.lower()
 
-        if any(word.lower() in subject_lower for word in FILTER_WORDS):
-            print(f"[FILTER] Mail {i} gelöscht | Subject: {subject}")
+        if any(
+            word.lower() in subject_lower
+            for word in FILTER_WORDS
+        ):
+            print(
+                f"[FILTER] Mail {i} gelöscht | Subject: {subject}"
+            )
 
             pop_conn.dele(i)
             continue
 
-        from_name, from_addr = parseaddr(str(email_msg.get('From', '')))
-        reply_name, reply_addr = parseaddr(str(email_msg.get('Reply-To', '')))
-        return_path = email_msg.get('Return-Path', '')
+        # ======================
+        # Senderinfos
+        # ======================
+        from_name, from_addr = parseaddr(
+            str(email_msg.get('From', ''))
+        )
+
+        reply_name, reply_addr = parseaddr(
+            str(email_msg.get('Reply-To', ''))
+        )
+
+        return_path = email_msg.get(
+            'Return-Path',
+            ''
+        )
+
         _, return_addr = parseaddr(return_path)
 
         original_from = (
@@ -164,13 +201,26 @@ for i in sorted(uidls.keys()):
             forward_raw
         )
 
-        # löschen nach Erfolg
+        # ======================
+        # Nach Erfolg löschen
+        # ======================
         pop_conn.dele(i)
-        print(f"[OK] Mail {i} weitergeleitet & gelöscht")
+
+        print(
+            f"[OK] Mail {i} weitergeleitet & gelöscht"
+        )
 
     except Exception as e:
-        safe_subject = subject if subject else "(no subject)"
-        print(f"[FEHLER] Mail {i} | Subject: {safe_subject} | Error: {e}")
+
+        safe_subject = (
+            subject
+            if subject
+            else "(no subject)"
+        )
+
+        print(
+            f"[FEHLER] Mail {i} | Subject: {safe_subject} | Error: {e}"
+        )
 
         try:
             pop_conn.rset()
@@ -180,7 +230,14 @@ for i in sorted(uidls.keys()):
 # ======================
 # Cleanup
 # ======================
-smtp.quit()
-pop_conn.quit()
+try:
+    smtp.quit()
+except Exception:
+    pass
+
+try:
+    pop_conn.quit()
+except Exception as e:
+    print(f"[WARN] POP3 QUIT Fehler: {e}")
 
 print("\nAlle Mails verarbeitet.")
