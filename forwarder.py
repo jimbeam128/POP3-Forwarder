@@ -16,6 +16,7 @@ FILTER_WORDS = [
     "crypto",
     "masturbating",
     "recorded",
+    "Porno-Webseiten",
     "bitcoin",
     "urgent",
 ]
