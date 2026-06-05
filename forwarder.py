@@ -41,13 +41,11 @@ def contains_filter(subject: str) -> bool:
 def inject_reply_to(headers: bytes, reply_to: str) -> bytes:
     """
     Entfernt vorhandenes Reply-To und setzt neues sauber.
-    Nur Header-Teil wird verändert.
     """
     lines = headers.split(b"\r\n")
     new_lines = []
 
     for line in lines:
-        # alte Reply-To entfernen
         if line.lower().startswith(b"reply-to:"):
             continue
         new_lines.append(line)
@@ -56,6 +54,54 @@ def inject_reply_to(headers: bytes, reply_to: str) -> bytes:
         new_lines.append(f"Reply-To: {reply_to}".encode())
 
     return b"\r\n".join(new_lines)
+
+
+# ======================
+# NEU: Transport-Header Cleaner (nur Kleinanzeigen)
+# ======================
+def clean_transport_headers(raw_headers: bytes) -> bytes:
+
+    REMOVE_HEADERS = {
+        "received",
+        "return-path",
+        "authentication-results",
+        "arc-seal",
+        "arc-message-signature",
+        "arc-authentication-results",
+        "dkim-signature",
+        "delivered-to",
+        "x-original-to",
+        "received-spf",
+        "x-spamd-bar",
+        "x-kasloop",
+    }
+
+    lines = raw_headers.split(b"\r\n")
+
+    result = []
+    skip_continuation = False
+
+    for line in lines:
+
+        # Header-Fortsetzung (wichtig!)
+        if line.startswith((b" ", b"\t")):
+            if skip_continuation:
+                continue
+            result.append(line)
+            continue
+
+        lower = line.lower()
+        skip_continuation = False
+
+        for h in REMOVE_HEADERS:
+            if lower.startswith(h.encode() + b":"):
+                skip_continuation = True
+                break
+
+        if not skip_continuation:
+            result.append(line)
+
+    return b"\r\n".join(result)
 
 
 # ======================
@@ -125,14 +171,10 @@ for msg_id in ids:
     print(f"\n[MAIL {msg_id}]")
 
     try:
-        # RAW holen
         resp, lines, _ = pop_conn.retr(msg_id)
-
         raw = b"\r\n".join(lines)
 
-        # Header / Body trennen
         split_pos = raw.find(b"\r\n\r\n")
-
         if split_pos == -1:
             print("[ERROR] Invalid mail format")
             continue
@@ -140,8 +182,9 @@ for msg_id in ids:
         raw_headers = raw[:split_pos]
         raw_body = raw[split_pos + 4:]
 
-        # Header parsen (nur für Analyse)
-        headers = HeaderParser().parsestr(raw_headers.decode(errors="ignore"))
+        headers = HeaderParser().parsestr(
+            raw_headers.decode(errors="ignore")
+        )
 
         subject = decode_subject(headers.get("Subject", ""))
 
@@ -156,6 +199,12 @@ for msg_id in ids:
             continue
 
         # ======================
+        # Kleinanzeigen erkennen
+        # ======================
+        from_header = headers.get("From", "").lower()
+        is_kleinanzeigen = "kleinanzeigen.de" in from_header
+
+        # ======================
         # Reply-To bestimmen
         # ======================
         reply_to = headers.get("Reply-To")
@@ -164,17 +213,24 @@ for msg_id in ids:
             reply_to = headers.get("From", "")
 
         # ======================
-        # HEADER PATCHEN (OHNE BODY TOUCH)
+        # HEADER PATCH
         # ======================
         new_headers = inject_reply_to(raw_headers, reply_to)
 
         # ======================
-        # FINAL RAW MAIL
+        # NEU: nur Kleinanzeigen bereinigen
+        # ======================
+        if is_kleinanzeigen:
+            print("[DEBUG] Kleinanzeigen erkannt -> Transportheader cleanup")
+            new_headers = clean_transport_headers(new_headers)
+
+        # ======================
+        # FINAL MAIL
         # ======================
         final_mail = new_headers + b"\r\n\r\n" + raw_body
 
         # ======================
-        # SEND (1:1 RFC SAFE)
+        # SEND
         # ======================
         smtp.sendmail(
             SMTP_FROM,
@@ -183,6 +239,7 @@ for msg_id in ids:
         )
 
         pop_conn.dele(msg_id)
+
         print("[OK] forwarded")
 
     except Exception as e:
