@@ -40,14 +40,12 @@ def contains_filter(subject: str) -> bool:
 
 def inject_reply_to(headers: bytes, reply_to: str) -> bytes:
     """
-    Entfernt vorhandenes Reply-To und setzt neues sauber.
-    Nur Header-Teil wird verändert.
+    Entfernt Reply-To und setzt neues sauber.
     """
     lines = headers.split(b"\r\n")
     new_lines = []
 
     for line in lines:
-        # alte Reply-To entfernen
         if line.lower().startswith(b"reply-to:"):
             continue
         new_lines.append(line)
@@ -78,7 +76,6 @@ SMTP_PASS = os.environ["SMTP_PASS"]
 
 SMTP_FROM = os.environ["SMTP_FROM"]
 TARGET_EMAIL = os.environ["TARGET_EMAIL"]
-
 
 # ======================
 # LOGIN POP3
@@ -125,14 +122,10 @@ for msg_id in ids:
     print(f"\n[MAIL {msg_id}]")
 
     try:
-        # RAW holen
         resp, lines, _ = pop_conn.retr(msg_id)
-
         raw = b"\r\n".join(lines)
 
-        # Header / Body trennen
         split_pos = raw.find(b"\r\n\r\n")
-
         if split_pos == -1:
             print("[ERROR] Invalid mail format")
             continue
@@ -140,11 +133,11 @@ for msg_id in ids:
         raw_headers = raw[:split_pos]
         raw_body = raw[split_pos + 4:]
 
-        # Header parsen (nur für Analyse)
-        headers = HeaderParser().parsestr(raw_headers.decode(errors="ignore"))
+        headers = HeaderParser().parsestr(
+            raw_headers.decode(errors="ignore")
+        )
 
         subject = decode_subject(headers.get("Subject", ""))
-
         print(f"[SUBJECT] {subject}")
 
         # ======================
@@ -156,6 +149,12 @@ for msg_id in ids:
             continue
 
         # ======================
+        # Kleinanzeigen erkennen
+        # ======================
+        from_header = headers.get("From", "").lower()
+        is_kleinanzeigen = "kleinanzeigen.de" in from_header
+
+        # ======================
         # Reply-To bestimmen
         # ======================
         reply_to = headers.get("Reply-To")
@@ -164,17 +163,38 @@ for msg_id in ids:
             reply_to = headers.get("From", "")
 
         # ======================
-        # HEADER PATCHEN (OHNE BODY TOUCH)
+        # HEADER PATCH
         # ======================
         new_headers = inject_reply_to(raw_headers, reply_to)
 
         # ======================
-        # FINAL RAW MAIL
+        # DMARC FIX (nur Kleinanzeigen)
+        # ======================
+        if is_kleinanzeigen:
+            print("[DEBUG] Kleinanzeigen -> DMARC-safe rewrite aktiv")
+
+            # WICHTIG: From überschreiben
+            # damit Gmail NICHT glaubt, wir senden im Namen von kleinanzeigen.de
+
+            lines = new_headers.split(b"\r\n")
+            cleaned = []
+
+            for line in lines:
+                if line.lower().startswith(b"from:"):
+                    continue
+                cleaned.append(line)
+
+            cleaned.append(f"From: {SMTP_FROM}".encode())
+
+            new_headers = b"\r\n".join(cleaned)
+
+        # ======================
+        # FINAL MAIL
         # ======================
         final_mail = new_headers + b"\r\n\r\n" + raw_body
 
         # ======================
-        # SEND (1:1 RFC SAFE)
+        # SEND
         # ======================
         smtp.sendmail(
             SMTP_FROM,
