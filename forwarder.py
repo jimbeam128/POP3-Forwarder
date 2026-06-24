@@ -19,6 +19,7 @@ FILTER_WORDS = [
     "Porno-Webseiten",
     "bitcoin",
     "urgent",
+    "Verdachts auf schädliche Aktivitäten"
 ]
 
 # ======================
