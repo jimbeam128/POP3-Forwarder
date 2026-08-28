@@ -20,6 +20,7 @@ FILTER_WORDS = [
     "bitcoin",
     "urgent",
     "Verdachts auf schädliche Aktivitäten"
+    "Alert! Login detected from a different location!"
 ]
 
 # ======================
